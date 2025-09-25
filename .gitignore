@@ -1,0 +1,12 @@
+RawFiles/
+SaveFiles/
+Assets/
+venv/
+build/
+dist/
+Bak/
+Sample/
+__pycache__/
+
+sheet_list.py
+local_secrets.py
