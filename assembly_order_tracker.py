@@ -55,6 +55,9 @@ from local_secrets import *
 script_start = time.time()
 print(f"Script started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+save_dir = os.path.join(os.path.dirname(__file__), "SaveFiles")
+log_camData_path = os.path.join(save_dir, "log_camData.json")
+
 #-------------------------------------------------------------------#
 #            Get smartsheet and convert to dataframe
 #-------------------------------------------------------------------#
@@ -93,7 +96,18 @@ t_convert_end = time.time() - t_convert_start
 t_camData_start = time.time()
 
 try:
-    assembly_job_tracking_df = load_assembly_job_data(ASSEMBLY_ACTIVE_DIRECTORY)
+    # Handle missing or empty JSON file
+    if not os.path.isfile(log_camData_path) or os.path.getsize(log_camData_path) == 0:
+        old_data = []
+    else:
+        try:
+            with open(log_camData_path, "r") as f:
+                old_data = json.load(f)
+        except Exception:
+            old_data = []
+
+    # Load assembly job tracking data from camReadme.txt files
+    assembly_job_tracking_df = load_assembly_job_data(ASSEMBLY_ACTIVE_DIRECTORY, log_camData_path)
 except Exception as e:
     print(f"Error loading assembly job tracking data: {e}")
 
@@ -106,12 +120,10 @@ try:
     assembly_job_tracking_df['internal_status'] = ""
 
     # Ensure SaveFiles directory exists
-    save_dir = os.path.join(os.path.dirname(__file__), "SaveFiles")
     os.makedirs(save_dir, exist_ok=True)
 
     # Save to JSON
-    json_path = os.path.join(save_dir, "log_camData.json")
-    assembly_job_tracking_df.to_json(json_path, orient="records", indent=2)
+    assembly_job_tracking_df.to_json(log_camData_path, orient="records", indent=2)
 
 except Exception as e:
     print(f"Error loading assembly job tracking data: {e}")

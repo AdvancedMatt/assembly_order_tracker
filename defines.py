@@ -1,4 +1,4 @@
-debug_output = True
+debug_output = False
 
 num_days_ago = 4 # Days ago to consider for filtering 
 num_days_future = 4 # Days in the future to consider for filtering

@@ -1,11 +1,9 @@
-import time
-import requests
 from cryptography.fernet import Fernet
 import pandas as pd
-from typing import List
 import os
-import smartsheet
 import sys
+import json
+from defines import bar_len
 
 from local_secrets import PASSWORD_FILE_PATH, ENCRYPTED_KEY_PATH
 
@@ -73,19 +71,27 @@ def convert_sheet_to_dataframe(sheet):
     """
     data = []
     columns = [col.title for col in sheet.columns]
+    total_rows = len(sheet.rows)
     
-    for row in sheet.rows:
+    for idx, row in enumerate(sheet.rows):
         row_data = {'_row_id': row.id}  # Add Smartsheet row ID
         for cell in row.cells:
             if cell.column_id in [col.id for col in sheet.columns]:
                 col_index = [col.id for col in sheet.columns].index(cell.column_id)
                 row_data[columns[col_index]] = cell.value
+
         data.append(row_data)
-    
+
+        # Show progress bar
+        blue_gradient_bar(idx + 1, total_rows, bar_len)
+    # Newline after progress bar
+    print()
+    print() 
+
     # Add '_row_id' to columns for DataFrame
     return pd.DataFrame(data, columns=['_row_id'] + columns)
 
-def load_assembly_job_data(network_dir: str) -> pd.DataFrame:
+def load_assembly_job_data(network_dir: str, log_camData_path: str) -> pd.DataFrame:
     """
     Scans the top-level directories in the given network path for camReadme.txt files, parses their contents,
     and returns a DataFrame of the results.
@@ -101,43 +107,61 @@ def load_assembly_job_data(network_dir: str) -> pd.DataFrame:
         - Only the top-level subdirectories of network_dir are searched (not recursive).
         - Progress is printed to the terminal using a bar of length bar_len from defines.py.
     """
-    from defines import bar_len
     data = []
-    mpn_by_wo = []  # List of dicts: { 'WO#': ..., 'MPN': ... }
+
+    # Step 1: Load previous data if available
+    if os.path.isfile(log_camData_path) and os.path.getsize(log_camData_path) > 0:
+        try:
+            with open(log_camData_path, "r") as f:
+                old_data = json.load(f)
+            old_lookup = {entry["__file_path__"]: entry for entry in old_data}
+        except Exception:
+            old_lookup = {}
+    else:
+        old_lookup = {}
+
     dir_names = [entry_name for entry_name in os.listdir(network_dir) if os.path.isdir(os.path.join(network_dir, entry_name))]
     total_dirs = len(dir_names)
-    found_files = 0
 
     for idx, entry_name in enumerate(dir_names):
         entry_path = os.path.join(network_dir, entry_name)
-        camreadme_path = os.path.join(entry_path, "camReadme.txt")
+        camreadme_path = os.path.normpath(os.path.join(entry_path, "camReadme.txt"))
+
         if os.path.isfile(camreadme_path):
-            found_files += 1
-            try:
-                with open(camreadme_path, "r", encoding="utf-8", errors="ignore") as f:
-                    entry = {}
-                    lines = f.readlines()
-                    for line in lines:
-                        if '|' in line:
-                            key, value = line.strip().split('|', 1)
-                            entry[key.strip()] = value.strip()
-                    entry['__file_path__'] = os.path.normpath(camreadme_path)
-
-                # Remove trailing '|' from all string values in entry
-                for k, v in entry.items():
-                    if isinstance(v, str):
-                        entry[k] = v.rstrip('|')
-
+            mtime = os.path.getmtime(camreadme_path)
+            # Step 3: Check if file is unchanged
+            if camreadme_path in old_lookup and old_lookup[camreadme_path].get("__file_mtime__") == mtime:
+                entry = old_lookup[camreadme_path]
                 data.append(entry)
-                    
-            except Exception as e:
-                print(f"Error reading {camreadme_path}: {e}")
+            else:
+                # Step 4: Parse new/changed file
+                try:
+                    with open(camreadme_path, "r", encoding="utf-8", errors="ignore") as f:
+                        entry = {}
+                        lines = f.readlines()
+                        for line in lines:
+                            if '|' in line:
+                                key, value = line.strip().split('|', 1)
+                                entry[key.strip()] = value.strip()
+                        entry['__file_path__'] = camreadme_path
+                        entry['__file_mtime__'] = mtime
+
+                    for k, v in entry.items():
+                        if isinstance(v, str):
+                            entry[k] = v.rstrip('|')
+
+                    data.append(entry)
+
+                except Exception as e:
+                    print(f"Error reading {camreadme_path}: {e}")
+                    continue
 
         # Print color gradient progress bar
         blue_gradient_bar(idx + 1, total_dirs, bar_len)
     # Newline after progress bar
     print()
+    print() 
 
     # Return all camData file information
-    return pd.DataFrame(data), pd.DataFrame(mpn_by_wo)
+    return pd.DataFrame(data)
 
