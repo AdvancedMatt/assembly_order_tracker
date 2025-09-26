@@ -173,9 +173,11 @@ def build_active_credithold_files(cam_data: list) -> tuple:
     
     # Get current date for tracking purposes
     current_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    total_records = len(cam_data)
     
     # Process each record in the source data
-    for record in cam_data:
+    for idx, record in enumerate(cam_data):
         status = record.get('Status', '')
         credit_hold = record.get('Credit Hold', '')
         
@@ -189,13 +191,21 @@ def build_active_credithold_files(cam_data: list) -> tuple:
         elif status not in excluded_statuses and credit_hold != 'YES':
             active_jobs.append(record)
 
+        # Print color gradient progress bar
+        blue_gradient_bar(idx + 1, total_records)
+    # Newline after progress bar
     print(f"Active jobs - {len(active_jobs)} records")
     print(f"Credit hold jobs - {len(credit_hold_jobs)} records")
+    print()
+    print() 
 
     return active_jobs, credit_hold_jobs
 
 def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs: list):
-    # Initialize statistics
+    print("Generating job statistics Excel file...")
+    
+    # Step 1: Initialize and calculate statistics
+    blue_gradient_bar(1, 4)
     job_statistics = {
         "total_jobs": 0,
         "active_jobs": 0,
@@ -207,13 +217,15 @@ def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs
     job_statistics["active_jobs"] = len(active_jobs)
     job_statistics["credit_hold_jobs"] = len(credit_hold_jobs)
 
-    # Create Excel file with job statistics and active jobs data
+    # Step 2: Prepare Excel file
+    blue_gradient_bar(2, 4)
     excel_file_path = 'SaveFiles/job_statistics.xlsx'
 
     # Create Excel writer object
     with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
         
-        # Sheet 1: Job Statistics Summary
+        # Step 3: Create Sheet 1 - Job Statistics Summary
+        blue_gradient_bar(3, 4)
         stats_df = pd.DataFrame([
             {'Metric': 'Total Jobs', 'Count': job_statistics["total_jobs"]},
             {'Metric': 'Active Jobs', 'Count': job_statistics["active_jobs"]}, 
@@ -221,7 +233,8 @@ def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs
         ])
         stats_df.to_excel(writer, sheet_name='Job Statistics', index=False)
         
-        # Sheet 2: Active Jobs Detail - from active jobs log file
+        # Step 4: Create Sheet 2 - Active Jobs Detail from active jobs log file
+        blue_gradient_bar(4, 4)
         try:
             with open('SaveFiles/log_active_jobs.json', 'r') as file:
                 active_jobs_data = json.load(file)
@@ -249,6 +262,7 @@ def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs
             empty_df = pd.DataFrame(columns=['WO#', 'Quote#', 'Status', 'Order Date', 'Customer'])
             empty_df.to_excel(writer, sheet_name='Active Jobs Detail', index=False)
 
+    # Complete - show final results
     print(f"Job statistics Excel file created: {excel_file_path}")
     print(f"Sheet 1: Job Statistics Summary with {len(stats_df)} metrics")
     if 'active_jobs_data' in locals():
