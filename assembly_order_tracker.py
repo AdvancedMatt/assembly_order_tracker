@@ -92,6 +92,13 @@ except Exception as e:
 t_convert_end = time.time() - t_convert_start
 
 #-------------------------------------------------------------------#
+#            Get smartsheet and convert to dataframe
+#-------------------------------------------------------------------#
+t_smartsheet_data_start = time.time()
+
+t_smartsheet_data_end = time.time() - t_smartsheet_data_start
+
+#-------------------------------------------------------------------#
 #             Get camData and convert to dataframe
 #-------------------------------------------------------------------#
 t_camData_start = time.time()
@@ -117,10 +124,8 @@ try:
     # Add 'internal_status' column, blank for all rows
     assembly_job_tracking_df['internal_status'] = ""
 
-    # Ensure SaveFiles directory exists
+    # Ensure SaveFiles directory exists and save
     os.makedirs(save_dir, exist_ok=True)
-
-    # Save to JSON
     assembly_job_tracking_df.to_json(log_camData_path, orient="records", indent=2)
 
 except Exception as e:
@@ -154,6 +159,48 @@ except Exception as e:
 t_active_jobs_file_time = time.time() - t_active_jobs_file_start
 
 #-------------------------------------------------------------------#
+#                Build missing purchase parts file
+#-------------------------------------------------------------------#
+t_purchase_parts_file_start = time.time()
+
+t_purchase_parts_file_end = time.time() - t_purchase_parts_file_start
+#-------------------------------------------------------------------#
+#           Build missing purchase parts designator file
+#-------------------------------------------------------------------#
+t_purchase_parts_designator_file_start = time.time()
+
+t_purchase_parts_designator_file_end = time.time() - t_purchase_parts_designator_file_start
+#-------------------------------------------------------------------#
+#                Build missing customer parts file
+#-------------------------------------------------------------------#
+t_customer_parts_file_start = time.time()
+
+t_customer_parts_file_end = time.time() - t_customer_parts_file_start
+#-------------------------------------------------------------------#
+#           Build missing customer parts designator file
+#-------------------------------------------------------------------#
+t_customer_parts_designator_file_start = time.time()
+
+t_customer_parts_designator_file_end = time.time() - t_customer_parts_designator_file_start
+#-------------------------------------------------------------------#
+#                      Build missing PCB file
+#-------------------------------------------------------------------#
+t_pcb_file_start = time.time()
+
+t_pcb_file_end = time.time() - t_pcb_file_start
+#-------------------------------------------------------------------#
+#                    Build missing stencil file
+#-------------------------------------------------------------------#
+t_stencil_file_start = time.time()
+
+t_stencil_file_end = time.time() - t_stencil_file_start
+#-------------------------------------------------------------------#
+#                       Build parts PO file
+#-------------------------------------------------------------------#
+t_parts_po_file_start = time.time()
+
+t_parts_po_file_end = time.time() - t_parts_po_file_start
+#-------------------------------------------------------------------#
 #                    Build job statistics file
 #-------------------------------------------------------------------#
 t_stats_file_start = time.time()
@@ -170,6 +217,13 @@ script_end = time.time()
 print(f"Loaded assembly job tracking data (smartsheet): {t_convert_end:.2f} seconds")
 print(f"Loaded assembly job tracking data (camReadme.txt): {t_camData_end:.2f} seconds")
 print(f"Built active assembly jobs file: {t_active_jobs_file_time:.2f} seconds")
+print(f"Built missing purchase parts file: {t_purchase_parts_file_end:.2f} seconds")
+print(f"Built missing purchase parts designator file: {t_purchase_parts_designator_file_end:.2f} seconds")
+print(f"Built missing customer parts file: {t_customer_parts_file_end:.2f} seconds")
+print(f"Built missing customer parts designator file: {t_customer_parts_designator_file_end:.2f} seconds")
+print(f"Built missing PCB file: {t_pcb_file_end:.2f} seconds")
+print(f"Built missing stencil file: {t_stencil_file_end:.2f} seconds")
+print(f"Built parts PO file: {t_parts_po_file_end:.2f} seconds")
 print(f"Built job statistics file: {t_stats_file_end:.2f} seconds")
 print(" ")
 print(f"Script ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
