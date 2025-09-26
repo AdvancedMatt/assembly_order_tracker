@@ -45,6 +45,7 @@ from datetime import datetime, timedelta
 import re
 import sys
 import os
+import json
 from glob import glob
 
 from defines import *
@@ -108,10 +109,7 @@ try:
 
     # Load assembly job tracking data from camReadme.txt files
     assembly_job_tracking_df = load_assembly_job_data(ASSEMBLY_ACTIVE_DIRECTORY, log_camData_path)
-except Exception as e:
-    print(f"Error loading assembly job tracking data: {e}")
-
-try:    
+   
     # Function returns a tuple (df, _), use only the first
     if isinstance(assembly_job_tracking_df, tuple):
         assembly_job_tracking_df = assembly_job_tracking_df[0]
@@ -131,12 +129,48 @@ except Exception as e:
 t_camData_end = time.time() - t_camData_start
 
 #-------------------------------------------------------------------#
+#         Build active assembly jobs and credit hold files
+#-------------------------------------------------------------------#
+t_active_jobs_file_start = time.time()
+
+try:
+    # Load the source data from log_camData.json
+    with open('SaveFiles/log_camData.json', 'r') as file:
+        cam_data = json.load(file)
+    
+    active_jobs, credit_hold_jobs = build_active_credithold_files(cam_data)
+    
+    # Write active jobs to log_active_jobs.json
+    with open('SaveFiles/log_active_jobs.json', 'w') as file:
+        json.dump(active_jobs, file, indent=2)
+    
+    # Write credit hold jobs to log_credit_hold.json
+    with open('SaveFiles/log_credit_hold.json', 'w') as file:
+        json.dump(credit_hold_jobs, file, indent=2)
+
+except Exception as e:
+    print(f"Error building active assembly jobs file: {e}")
+
+t_active_jobs_file_time = time.time() - t_active_jobs_file_start
+
+#-------------------------------------------------------------------#
+#                    Build job statistics file
+#-------------------------------------------------------------------#
+t_stats_file_start = time.time()
+
+generate_statistics_file(cam_data, active_jobs, credit_hold_jobs)
+
+t_stats_file_end = time.time() - t_stats_file_start
+
+#-------------------------------------------------------------------#
 #                         Print timing data
 #-------------------------------------------------------------------#
 script_end = time.time()
 
 print(f"Loaded assembly job tracking data (smartsheet): {t_convert_end:.2f} seconds")
 print(f"Loaded assembly job tracking data (camReadme.txt): {t_camData_end:.2f} seconds")
+print(f"Built active assembly jobs file: {t_active_jobs_file_time:.2f} seconds")
+print(f"Built job statistics file: {t_stats_file_end:.2f} seconds")
 print(" ")
 print(f"Script ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"Total script runtime: {script_end - script_start:.2f} seconds")

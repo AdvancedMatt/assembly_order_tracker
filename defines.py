@@ -1,9 +1,15 @@
 debug_output = False
 
-num_days_ago = 4 # Days ago to consider for filtering 
-num_days_future = 4 # Days in the future to consider for filtering
+# Filter out records where 'Status' in the excluded statuses list
+excluded_statuses = [
+    'Closed', 'Shipped', 'Closed Short',
+    'Prog-Q', 'Prog-Done', 'Outside Hold', 'SMT-Setup', 'Hold-Floor', 'Floor',
+    'Ship-Partial', 'Close Short', 'CAM Hold', 'Packaging', 'Thruhole',
+    'Outside-Prog', 'Programming', 'QC Inspection', 'Selective Solder',
+    'SMT-Done', 'FA-Thruhole', 'Cancelled'
+]
 
-bar_len = 40 # Progress bar length
+bar_len = 100 # Progress bar length
 
 delete_batch_size = 240  # Delete smartsheet batch size
 insert_batch_size = 450  # Insert smartsheet batch size

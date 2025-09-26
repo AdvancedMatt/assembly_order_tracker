@@ -3,11 +3,12 @@ import pandas as pd
 import os
 import sys
 import json
-from defines import bar_len
+from datetime import datetime
 
+from defines import bar_len, excluded_statuses
 from local_secrets import PASSWORD_FILE_PATH, ENCRYPTED_KEY_PATH
 
-def blue_gradient_bar(progress, total, bar_len=100):
+def blue_gradient_bar(progress, total):
     """
     Prints a blue gradient progress bar to the terminal.
     progress: current progress (int)
@@ -83,7 +84,7 @@ def convert_sheet_to_dataframe(sheet):
         data.append(row_data)
 
         # Show progress bar
-        blue_gradient_bar(idx + 1, total_rows, bar_len)
+        blue_gradient_bar(idx + 1, total_rows)
     # Newline after progress bar
     print()
     print() 
@@ -157,11 +158,99 @@ def load_assembly_job_data(network_dir: str, log_camData_path: str) -> pd.DataFr
                     continue
 
         # Print color gradient progress bar
-        blue_gradient_bar(idx + 1, total_dirs, bar_len)
+        blue_gradient_bar(idx + 1, total_dirs)
     # Newline after progress bar
     print()
     print() 
 
     # Return all camData file information
     return pd.DataFrame(data)
+
+def build_active_credithold_files(cam_data: list) -> tuple:
+    # Initialize lists for the two output files
+    active_jobs = []
+    credit_hold_jobs = []
+    
+    # Get current date for tracking purposes
+    current_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Process each record in the source data
+    for record in cam_data:
+        status = record.get('Status', '')
+        credit_hold = record.get('Credit Hold', '')
+        
+        # Check if job is on credit hold
+        if credit_hold == 'YES':
+            # Add to credit hold list with tracking date
+            credit_hold_record = record.copy()
+            credit_hold_record['tracking_date'] = current_date
+            credit_hold_jobs.append(credit_hold_record)
+        # Check if job is active (not in excluded statuses and not on credit hold)
+        elif status not in excluded_statuses and credit_hold != 'YES':
+            active_jobs.append(record)
+
+    print(f"Active jobs - {len(active_jobs)} records")
+    print(f"Credit hold jobs - {len(credit_hold_jobs)} records")
+
+    return active_jobs, credit_hold_jobs
+
+def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs: list):
+    # Initialize statistics
+    job_statistics = {
+        "total_jobs": 0,
+        "active_jobs": 0,
+        "credit_hold_jobs": 0
+    }
+
+    # Update statistics based on processed jobs
+    job_statistics["total_jobs"] = len(cam_data)
+    job_statistics["active_jobs"] = len(active_jobs)
+    job_statistics["credit_hold_jobs"] = len(credit_hold_jobs)
+
+    # Create Excel file with job statistics and active jobs data
+    excel_file_path = 'SaveFiles/job_statistics.xlsx'
+
+    # Create Excel writer object
+    with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
+        
+        # Sheet 1: Job Statistics Summary
+        stats_df = pd.DataFrame([
+            {'Metric': 'Total Jobs', 'Count': job_statistics["total_jobs"]},
+            {'Metric': 'Active Jobs', 'Count': job_statistics["active_jobs"]}, 
+            {'Metric': 'Credit Hold Jobs', 'Count': job_statistics["credit_hold_jobs"]}
+        ])
+        stats_df.to_excel(writer, sheet_name='Job Statistics', index=False)
+        
+        # Sheet 2: Active Jobs Detail - from active jobs log file
+        try:
+            with open('SaveFiles/log_active_jobs.json', 'r') as file:
+                active_jobs_data = json.load(file)
+            
+            # Create DataFrame with specified columns
+            if active_jobs_data:
+                active_jobs_df = pd.DataFrame([
+                    {
+                        'WO#': job.get('WO#', ''),
+                        'Quote#': job.get('Quote#', ''),
+                        'Status': job.get('Status', ''),
+                        'Order Date': job.get('Order Date', ''),
+                        'Customer': job.get('Customer', '')
+                    }
+                    for job in active_jobs_data
+                ])
+            else:
+                # Create empty DataFrame with headers if no data
+                active_jobs_df = pd.DataFrame(columns=['WO#', 'Quote#', 'Status', 'Order Date', 'Customer'])
+            
+            active_jobs_df.to_excel(writer, sheet_name='Active Jobs Detail', index=False)
+            
+        except FileNotFoundError:
+            # If active jobs file doesn't exist, create empty sheet
+            empty_df = pd.DataFrame(columns=['WO#', 'Quote#', 'Status', 'Order Date', 'Customer'])
+            empty_df.to_excel(writer, sheet_name='Active Jobs Detail', index=False)
+
+    print(f"Job statistics Excel file created: {excel_file_path}")
+    print(f"Sheet 1: Job Statistics Summary with {len(stats_df)} metrics")
+    if 'active_jobs_data' in locals():
+        print(f"Sheet 2: Active Jobs Detail with {len(active_jobs_data)} records")
 
