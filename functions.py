@@ -5,7 +5,7 @@ import sys
 import json
 from datetime import datetime
 
-from defines import bar_len, excluded_statuses
+from defines import bar_len, excluded_statuses, user_entered_columns
 from local_secrets import PASSWORD_FILE_PATH, ENCRYPTED_KEY_PATH
 
 def blue_gradient_bar(progress, total):
@@ -267,4 +267,74 @@ def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs
     print(f"Sheet 1: Job Statistics Summary with {len(stats_df)} metrics")
     if 'active_jobs_data' in locals():
         print(f"Sheet 2: Active Jobs Detail with {len(active_jobs_data)} records")
+
+def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extracts user-entered data from specified columns in the Smartsheet DataFrame.
+    Stores data in a json log file with row ID and WO#
+
+    Args:
+        smartsheet df (pd.DataFrame): DataFrame containing Smartsheet data, including a '_row_id' column.
+
+    Returns:
+        None.
+    """
+    try:
+        # Extract user-entered data from smartsheet
+        if 'smartsheet_part_tracking_df' in locals() and not smartsheet_part_tracking_df.empty:
+            # Filter to only include rows that have data in user-entered columns
+            user_entered_data = []
+            
+            for index, row in smartsheet_part_tracking_df.iterrows():
+                # Check if any of the user-entered columns have non-null values
+                has_user_data = False
+                row_data = {}
+                
+                # Include essential columns only: _row_id, WO#, and user-entered columns
+                essential_columns = ['_row_id', 'WO#'] + user_entered_columns
+                
+                # Add _row_id for reference if it exists
+                if '_row_id' in smartsheet_part_tracking_df.columns:
+                    row_data['_row_id'] = row['_row_id']
+                
+                # Add WO# for identification if it exists
+                if 'WO#' in smartsheet_part_tracking_df.columns:
+                    row_data['WO#'] = row['WO#'] if pd.notna(row['WO#']) else None
+                
+                # Process user-entered columns
+                for col in user_entered_columns:
+                    if col in smartsheet_part_tracking_df.columns:
+                        # Check if this user-entered column has data
+                        if pd.notna(row[col]) and str(row[col]).strip() != '':
+                            has_user_data = True
+                            row_data[col] = row[col]
+                        else:
+                            row_data[col] = None
+                
+                # Only include rows that have some user-entered data
+                if has_user_data:
+                    user_entered_data.append(row_data)
+            
+            # Ensure SaveFiles directory exists
+            os.makedirs('SaveFiles', exist_ok=True)
+            
+            # Save to JSON file
+            user_data_file_path = 'SaveFiles/log_user_entered_data.json'
+            with open(user_data_file_path, 'w') as file:
+                json.dump(user_entered_data, file, indent=2, default=str)
+            
+            print(f"User-entered data saved: {len(user_entered_data)} records with user input")
+            print(f"File location: {user_data_file_path}")
+        
+        else:
+            print("No smartsheet data available to extract user-entered information")
+            # Create empty file
+            with open('SaveFiles/log_user_entered_data.json', 'w') as file:
+                json.dump([], file)
+
+    except Exception as e:
+        print(f"Error storing user-entered data: {e}")
+        # Create empty file on error
+        with open('SaveFiles/log_user_entered_data.json', 'w') as file:
+            json.dump([], file)
 

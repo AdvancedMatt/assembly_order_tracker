@@ -69,32 +69,27 @@ try:
     smartsheet_client = smartsheet.Smartsheet(ACCESS_TOKEN)
     smartsheet_client.errors_as_exceptions(True)
 
-    try:
-        smartsheet_sheet = smartsheet_client.Sheets.get_sheet(assembly_part_tracking_id)
-        smartsheet_part_tracking_df = convert_sheet_to_dataframe(smartsheet_sheet)
-        
-        if debug_output:
-            print("Smartsheet DataFrame columns:", smartsheet_part_tracking_df.columns.tolist())
-            print("First few rows of Smartsheet DataFrame:")
-            print(smartsheet_part_tracking_df.head())
-            if '_row_id' in smartsheet_part_tracking_df.columns:
-                print("_row_id sample:", smartsheet_part_tracking_df['_row_id'].head().tolist())
-
-    except smartsheet.exceptions.ApiError as e:
-        print(f"Error: {e}")  
-        t_convert = None
-
+    smartsheet_sheet = smartsheet_client.Sheets.get_sheet(assembly_part_tracking_id)
+    smartsheet_part_tracking_df = convert_sheet_to_dataframe(smartsheet_sheet)
+    
     if debug_output:
-        print("Loaded smartsheet job tracking data:", smartsheet_part_tracking_df.shape)
+        print("Smartsheet DataFrame columns:", smartsheet_part_tracking_df.columns.tolist())
+        print("First few rows of Smartsheet DataFrame:")
+        print(smartsheet_part_tracking_df.head())
+        if '_row_id' in smartsheet_part_tracking_df.columns:
+            print("_row_id sample:", smartsheet_part_tracking_df['_row_id'].head().tolist())
+
 except Exception as e:
     print(f"Error converting Smartsheet data: {e}")
 
 t_convert_end = time.time() - t_convert_start
 
 #-------------------------------------------------------------------#
-#            Get smartsheet and convert to dataframe
+#            Store smartsheet user entered infomration 
 #-------------------------------------------------------------------#
 t_smartsheet_data_start = time.time()
+
+store_smartsheet_user_data(smartsheet_part_tracking_df)
 
 t_smartsheet_data_end = time.time() - t_smartsheet_data_start
 
@@ -214,7 +209,8 @@ t_stats_file_end = time.time() - t_stats_file_start
 #-------------------------------------------------------------------#
 script_end = time.time()
 
-print(f"Loaded assembly job tracking data (smartsheet): {t_convert_end:.2f} seconds")
+print(f"Loaded assembly job tracker (smartsheet): {t_convert_end:.2f} seconds")
+print(f"Stored smartsheet user data: {t_smartsheet_data_end:.2f} seconds")
 print(f"Loaded assembly job tracking data (camReadme.txt): {t_camData_end:.2f} seconds")
 print(f"Built active assembly jobs file: {t_active_jobs_file_time:.2f} seconds")
 print(f"Built missing purchase parts file: {t_purchase_parts_file_end:.2f} seconds")

@@ -1,5 +1,10 @@
 debug_output = False
 
+# Smartsheet columns to store - used to restor smartsheet during update
+user_entered_columns = [
+    'Date and Action', 'Complete'
+]
+
 # Filter out records where 'Status' in the excluded statuses list
 excluded_statuses = [
     'Closed', 'Shipped', 'Closed Short',
