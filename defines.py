@@ -7,12 +7,16 @@ user_entered_columns = [
 
 # Filter out records where 'Status' in the excluded statuses list
 excluded_statuses = [
-    'Closed', 'Shipped', 'Closed Short',
-    'Prog-Q', 'Prog-Done', 'Outside Hold', 'SMT-Setup', 'Hold-Floor', 'Floor',
-    'Ship-Partial', 'Close Short', 'CAM Hold', 'Packaging', 'Thruhole',
-    'Outside-Prog', 'Programming', 'QC Inspection', 'Selective Solder',
-    'SMT-Done', 'FA-Thruhole', 'Cancelled'
+    'Closed', 'Shipped', 'Closed Short', 'Cancelled'
 ]
+
+# excluded_statuses = [
+#     'Closed', 'Shipped', 'Closed Short',
+#     'Prog-Q', 'Prog-Done', 'Outside Hold', 'SMT-Setup', 'Hold-Floor', 'Floor',
+#     'Ship-Partial', 'Close Short', 'CAM Hold', 'Packaging', 'Thruhole',
+#     'Outside-Prog', 'Programming', 'QC Inspection', 'Selective Solder',
+#     'SMT-Done', 'FA-Thruhole', 'Cancelled'
+# ]
 
 bar_len = 100 # Progress bar length
 
