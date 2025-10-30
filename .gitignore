@@ -10,3 +10,5 @@ __pycache__/
 
 sheet_list.py
 local_secrets.py
+hook-smartsheet.py
+assembly_order_tracker.spec

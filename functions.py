@@ -6,21 +6,36 @@ import sys
 import json
 from datetime import datetime
 from dateutil import parser
+import random
+import numpy as np
+import smartsheet
 
-from defines import bar_len, excluded_statuses, user_entered_columns
+from defines import *
 from local_secrets import PASSWORD_FILE_PATH, ENCRYPTED_KEY_PATH
 
-def blue_gradient_bar(progress, total):
+def blue_gradient_bar(progress, total, end_color=None):
     """
-    Prints a blue gradient progress bar to the terminal.
-    progress: current progress (int)
-    total: total steps (int)
-    bar_len: length of the bar (int)
+    Prints a gradient progress bar to the terminal with customizable end color.
+    
+    Args:
+        progress (int): Current progress value
+        total (int): Total steps/maximum progress value
+        end_color (tuple, optional): RGB tuple for end color. If None, a random vibrant color is chosen.
+    
+    Returns:
+        None: Prints progress bar directly to terminal
     """
     # Light blue (start): RGB(173, 216, 230)
     # Dark blue (end):   RGB(0, 0, 139)
     start_rgb = (173, 216, 230)
-    end_rgb = (0, 0, 139)
+    
+    # If no end color specified, generate a random vibrant color
+    if end_color is None:
+        # Generate random vibrant colors by ensuring at least one RGB component is high
+        end_rgb = random.choice(color_options)
+    else:
+        end_rgb = end_color
+
     filled_len = int(bar_len * progress // total) if total else bar_len
     bar = ""
     for i in range(bar_len):
@@ -71,6 +86,7 @@ def convert_sheet_to_dataframe(sheet):
     Returns:
         pd.DataFrame: DataFrame containing the sheet's data, with columns matching the sheet's 
         column titles. Empty cells are returned as None. Column order matches the Smartsheet sheet.
+        Includes '_row_id' column with Smartsheet row IDs for tracking purposes.
     """
     data = []
     columns = [col.title for col in sheet.columns]
@@ -86,7 +102,7 @@ def convert_sheet_to_dataframe(sheet):
         data.append(row_data)
 
         # Show progress bar
-        blue_gradient_bar(idx + 1, total_rows)
+        blue_gradient_bar(idx + 1, total_rows, color_options[2])  # Using Dark Blue as end color
     # Newline after progress bar
     print()
     print() 
@@ -106,12 +122,27 @@ def load_json_file(file_path: str, default_value=None):
         The loaded JSON data, or default_value if file doesn't exist/is corrupted
     """
     try:
-        if os.path.isfile(file_path) and os.path.getsize(file_path) > 0:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+        if os.path.isfile(file_path):
+            if os.path.getsize(file_path) > 0:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                print(f"⚠ File is empty: {file_path}")
+                return default_value if default_value is not None else []
         else:
-            print(f"⚠ File not found or empty: {file_path}")
-            return default_value if default_value is not None else []
+            print(f"⚠ File not found, creating: {file_path}")
+            # Create the directory if it doesn't exist
+            directory = os.path.dirname(file_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            
+            # Create the file with default value
+            default_data = default_value if default_value is not None else []
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(default_data, f, indent=2)
+            
+            return default_data
+        
     except json.JSONDecodeError as e:
         print(f"⚠ Error: Corrupted JSON file {file_path}: {e}")
         return default_value if default_value is not None else []
@@ -226,7 +257,7 @@ def load_assembly_job_data(network_dir: str, log_camData_path: str) -> pd.DataFr
                     continue
 
         # Print color gradient progress bar
-        blue_gradient_bar(idx + 1, total_dirs)
+        blue_gradient_bar(idx + 1, total_dirs, color_options[1])
     # Newline after progress bar
     print()
     print() 
@@ -235,6 +266,19 @@ def load_assembly_job_data(network_dir: str, log_camData_path: str) -> pd.DataFr
     return pd.DataFrame(data)
 
 def build_active_credithold_files(cam_data: list, existing_credit_holds: set) -> tuple:
+    """
+    Processes CAM data to separate active jobs from credit hold jobs and identify released credit holds.
+    
+    Args:
+        cam_data (list): List of dictionaries containing CAM data records with job information
+        existing_credit_holds (set): Set of WO# numbers that were previously on credit hold
+        
+    Returns:
+        tuple: Three-element tuple containing:
+            - active_jobs (list): Jobs not excluded and not on credit hold
+            - credit_hold_jobs (list): Jobs currently on credit hold with tracking date
+            - credit_hold_released (list): Jobs released from credit hold with release date
+    """
     # Initialize lists for the two output files
     active_jobs = []
     credit_hold_jobs = []
@@ -283,7 +327,7 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
             active_jobs.append(record)
 
         # Print color gradient progress bar
-        blue_gradient_bar(idx + 1, total_records)
+        blue_gradient_bar(idx + 1, total_records, color_options[0])
     # Newline after progress bar
     print(f"Active jobs - {len(active_jobs)} records")
     print(f"Credit hold jobs - {len(credit_hold_jobs)} records")
@@ -293,83 +337,17 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
 
     return active_jobs, credit_hold_jobs, credit_hold_released
 
-def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs: list):
-    print("Generating job statistics Excel file...")
-    
-    # Step 1: Initialize and calculate statistics
-    blue_gradient_bar(1, 4)
-    job_statistics = {
-        "total_jobs": 0,
-        "active_jobs": 0,
-        "credit_hold_jobs": 0
-    }
-
-    # Update statistics based on processed jobs
-    job_statistics["total_jobs"] = len(cam_data)
-    job_statistics["active_jobs"] = len(active_jobs)
-    job_statistics["credit_hold_jobs"] = len(credit_hold_jobs)
-
-    # Step 2: Prepare Excel file
-    blue_gradient_bar(2, 4)
-    excel_file_path = 'SaveFiles/job_statistics.xlsx'
-
-    # Create Excel writer object
-    with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-        
-        # Step 3: Create Sheet 1 - Job Statistics Summary
-        blue_gradient_bar(3, 4)
-        stats_df = pd.DataFrame([
-            {'Metric': 'Total Jobs', 'Count': job_statistics["total_jobs"]},
-            {'Metric': 'Active Jobs', 'Count': job_statistics["active_jobs"]}, 
-            {'Metric': 'Credit Hold Jobs', 'Count': job_statistics["credit_hold_jobs"]}
-        ])
-        stats_df.to_excel(writer, sheet_name='Job Statistics', index=False)
-        
-        # Step 4: Create Sheet 2 - Active Jobs Detail from active jobs log file
-        blue_gradient_bar(4, 4)
-        try:
-            with open('SaveFiles/log_active_jobs.json', 'r') as file:
-                active_jobs_data = json.load(file)
-            
-            # Create DataFrame with specified columns
-            if active_jobs_data:
-                active_jobs_df = pd.DataFrame([
-                    {
-                        'WO#': job.get('WO#', ''),
-                        'Quote#': job.get('Quote#', ''),
-                        'Status': job.get('Status', ''),
-                        'Order Date': job.get('Order Date', ''),
-                        'Customer': job.get('Customer', '')
-                    }
-                    for job in active_jobs_data
-                ])
-            else:
-                # Create empty DataFrame with headers if no data
-                active_jobs_df = pd.DataFrame(columns=['WO#', 'Quote#', 'Status', 'Order Date', 'Customer'])
-            
-            active_jobs_df.to_excel(writer, sheet_name='Active Jobs Detail', index=False)
-            
-        except FileNotFoundError:
-            # If active jobs file doesn't exist, create empty sheet
-            empty_df = pd.DataFrame(columns=['WO#', 'Quote#', 'Status', 'Order Date', 'Customer'])
-            empty_df.to_excel(writer, sheet_name='Active Jobs Detail', index=False)
-
-    # Complete - show final results
-    print(f"Job statistics Excel file created: {excel_file_path}")
-    print(f"Sheet 1: Job Statistics Summary with {len(stats_df)} metrics")
-    if 'active_jobs_data' in locals():
-        print(f"Sheet 2: Active Jobs Detail with {len(active_jobs_data)} records")
-
 def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.DataFrame:
     """
     Extracts user-entered data from specified columns in the Smartsheet DataFrame.
-    Stores data in a json log file with row ID and WO#
+    Stores data in a json log file with row ID and WO# for tracking user modifications.
 
     Args:
-        smartsheet df (pd.DataFrame): DataFrame containing Smartsheet data, including a '_row_id' column.
+        smartsheet_part_tracking_df (pd.DataFrame): DataFrame containing Smartsheet data, 
+            including a '_row_id' column for row identification.
 
     Returns:
-        None.
+        None: Saves user data to 'SaveFiles/log_user_entered_data.json' and prints status.
     """
     try:
         # Extract user-entered data from smartsheet
@@ -410,7 +388,7 @@ def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.
                     user_entered_data.append(row_data)
 
                 # Show progress bar
-                blue_gradient_bar(index + 1, total_rows)
+                blue_gradient_bar(index + 1, total_rows, color_options[7])
             # Newline after progress bar
             print()
             print()
@@ -444,10 +422,10 @@ def extract_first_designator(designators_string):
     separated by comma, space, semicolon, or ranges with dashes.
     
     Args:
-        designators_string (str): String containing designators
+        designators_string (str): String containing designators (e.g., "C1,C2,C3" or "R1-R10")
         
     Returns:
-        str: First designator found, stripped of whitespace
+        str: First designator found, stripped of whitespace. Returns empty string if input is None/empty.
     """
     if not designators_string:
         return ''
@@ -476,6 +454,16 @@ def extract_first_designator(designators_string):
     return designators_string.strip()
 
 def format_mmddyy(date_str):
+    """
+    Converts various date string formats to YYYY-MM-DD format compatible with smartsheet.
+    
+    Args:
+        date_str (str): Date string in various formats to be parsed and standardized
+        
+    Returns:
+        str: Date in YYYY-MM-DD format, or original string if parsing fails, 
+             or empty string if input is None/null
+    """
     if not date_str or str(date_str).lower() in ['none', 'null', '']:
         return ""
     try:
@@ -486,6 +474,19 @@ def format_mmddyy(date_str):
         return str(date_str)  # fallback to original if parsing fails
 
 def build_master_bom(jobs_df: pd.DataFrame, assembly_active_directory: str, debug_output: bool = False) -> pd.DataFrame:
+    """
+    Scans assembly directories for stdBOM files and builds a master BOM DataFrame from active jobs.
+    
+    Args:
+        jobs_df (pd.DataFrame): DataFrame containing active job data with WO# and Quote# columns
+        assembly_active_directory (str): Path to directory containing assembly job folders
+        debug_output (bool, optional): Whether to display debug information. Defaults to False.
+        
+    Returns:
+        pd.DataFrame: Master BOM DataFrame with all parts from active jobs' stdBOM files.
+            Includes columns for WO#, Quote#, Part_Number, MPN, Description, quantities, etc.
+            Saves CSV to 'SaveFiles/master_BOM_no_overage.csv'
+    """
     print("Building master BOM dataframe...")
     
     # Initialize list to store all BOM data
@@ -573,7 +574,7 @@ def build_master_bom(jobs_df: pd.DataFrame, assembly_active_directory: str, debu
                     continue
             
             # Show progress
-            blue_gradient_bar(idx + 1, total_dirs)
+            blue_gradient_bar(idx + 1, total_dirs, color_options[8])
         
         # Newline after progress bar
         print()
@@ -607,98 +608,119 @@ def build_master_bom(jobs_df: pd.DataFrame, assembly_active_directory: str, debu
 
     return master_bom_df
 
-def add_overage_to_master_bom(master_bom_df, QUOTE_DIR):
+def add_overage_to_master_bom(master_bom_df, QUOTE_DIR, apply_overage=True):
+    """
+    Updates master BOM quantities with purchasing overage data from quote directories.
+    
+    Args:
+        master_bom_df (pd.DataFrame): Master BOM DataFrame to update with overage quantities
+        QUOTE_DIR (str): Path to quotes directory containing purchasing subdirectories with Excel files
+        apply_overage (bool, optional): Whether to apply overage quantities from purchasing files. 
+                                      If False, saves master BOM without overage processing. Defaults to True.
+        
+    Returns:
+        pd.DataFrame: Updated master BOM DataFrame with purchasing quantities applied (if apply_overage=True).
+                      Saves updated CSV to 'SaveFiles/master_BOM.csv'
+    """
     if not master_bom_df.empty:
-        print("Adding purchasing overage to master BOM...")
-
         # Create a copy to avoid modifying the original
         master_bom_with_overage = master_bom_df.copy()
         
-        # Get unique Quote# values from the BOM
-        unique_quotes = master_bom_df['Quote#'].dropna().unique()
-        print(f"Found {len(unique_quotes)} unique quotes to process")
-        
-        # Pre-load all purchasing data to avoid repeated file I/O
-        purchasing_data_cache = {}
-
-        total_dirs = len(unique_quotes)
-        processed_count = 0
-        
-        for quote_num in unique_quotes:
-            processed_count += 1
-
-            if quote_num:  # Skip empty quote numbers
-                quote_dir_path = os.path.join(QUOTE_DIR, quote_num)
-                
-                if os.path.exists(quote_dir_path) and os.path.isdir(quote_dir_path):
-                    purchasing_dir = os.path.join(quote_dir_path, "purchasing")
-                    
-                    if os.path.exists(purchasing_dir) and os.path.isdir(purchasing_dir):
-                        try:
-                            # Find Excel files in the purchasing directory
-                            excel_files = [f for f in os.listdir(purchasing_dir) 
-                                         if f.endswith(('.xlsx', '.xls'))]
-                            
-                            if excel_files:
-                                # Use the first Excel file found
-                                excel_file = excel_files[0]
-                                excel_path = os.path.join(purchasing_dir, excel_file)
-                                
-                                try:
-                                    # Read the Excel file
-                                    purchasing_df = pd.read_excel(excel_path)
-                                    
-                                    # Check if required columns exist
-                                    if 'MPN' in purchasing_df.columns and 'Buy Quantity' in purchasing_df.columns:
-                                        # Cache the lookup dictionary
-                                        purchasing_data_cache[quote_num] = dict(zip(purchasing_df['MPN'], purchasing_df['Buy Quantity']))
-                                        
-                                except Exception as e:
-                                    print(f"Error reading Excel file {excel_path}: {e}")
-                        except Exception as e:
-                            print(f"Error accessing purchasing directory {purchasing_dir}: {e}")
-
-            # Show progress
-            blue_gradient_bar(processed_count + 1, total_dirs)
-        
-        # Newline after progress bar
-        print()
-        print(f"Processed {processed_count} directories with stdBOM files")
-        
-        # Now update the DataFrame using vectorized operations where possible
-        updates_made = 0
-        processed_quotes = len(purchasing_data_cache)
-        processed_count = 0
-        
-        for quote_num, mpn_to_buy_qty in purchasing_data_cache.items():
-            processed_count += 1
-            # Get all rows for this quote
-            quote_mask = master_bom_with_overage['Quote#'] == quote_num
+        if apply_overage:
+            print("Adding purchasing overage to master BOM...")
             
-            # Update quantities for matching MPNs
-            for mpn, buy_qty in mpn_to_buy_qty.items():
-                mpn_mask = master_bom_with_overage['MPN'] == mpn
-                combined_mask = quote_mask & mpn_mask
-                
-                if combined_mask.any():
-                    master_bom_with_overage.loc[combined_mask, 'Req_Qty'] = buy_qty
-                    updates_made += combined_mask.sum()
+            # Get unique Quote# values from the BOM
+            unique_quotes = master_bom_df['Quote#'].dropna().unique()
+            print(f"Found {len(unique_quotes)} unique quotes to process")
+            
+            # Pre-load all purchasing data to avoid repeated file I/O
+            purchasing_data_cache = {}
 
-            # Show progress
-            blue_gradient_bar(processed_count + 1, processed_quotes)
-        
-        # Newline after progress bar
-        print()        
-        print(f"Processed {processed_quotes} quotes with purchasing data")
-        print(f"Made {updates_made} quantity updates to BOM")
+            total_dirs = len(unique_quotes)
+            processed_count = 0
+            
+            for quote_num in unique_quotes:
+                processed_count += 1
+
+                if quote_num:  # Skip empty quote numbers
+                    quote_dir_path = os.path.join(QUOTE_DIR, quote_num)
+                    
+                    if os.path.exists(quote_dir_path) and os.path.isdir(quote_dir_path):
+                        purchasing_dir = os.path.join(quote_dir_path, "purchasing")
+                        
+                        if os.path.exists(purchasing_dir) and os.path.isdir(purchasing_dir):
+                            try:
+                                # Find Excel files in the purchasing directory
+                                excel_files = [f for f in os.listdir(purchasing_dir) 
+                                             if f.endswith(('.xlsx', '.xls'))]
+                                
+                                if excel_files:
+                                    # Use the first Excel file found
+                                    excel_file = excel_files[0]
+                                    excel_path = os.path.join(purchasing_dir, excel_file)
+                                    
+                                    try:
+                                        # Read the Excel file
+                                        purchasing_df = pd.read_excel(excel_path)
+                                        
+                                        # Check if required columns exist
+                                        if 'MPN' in purchasing_df.columns and 'Buy Quantity' in purchasing_df.columns:
+                                            # Cache the lookup dictionary
+                                            purchasing_data_cache[quote_num] = dict(zip(purchasing_df['MPN'], purchasing_df['Buy Quantity']))
+                                            
+                                    except Exception as e:
+                                        print(f"Error reading Excel file {excel_path}: {e}")
+                            except Exception as e:
+                                print(f"Error accessing purchasing directory {purchasing_dir}: {e}")
+
+                # Show progress
+                blue_gradient_bar(processed_count + 1, total_dirs, color_options[9])
+            
+            # Newline after progress bar
+            print()
+            print(f"Processed {processed_count} directories with stdBOM files")
+            
+            # Now update the DataFrame using vectorized operations where possible
+            updates_made = 0
+            processed_quotes = len(purchasing_data_cache)
+            processed_count = 0
+            
+            for quote_num, mpn_to_buy_qty in purchasing_data_cache.items():
+                processed_count += 1
+                # Get all rows for this quote
+                quote_mask = master_bom_with_overage['Quote#'] == quote_num
+                
+                # Update quantities for matching MPNs
+                for mpn, buy_qty in mpn_to_buy_qty.items():
+                    mpn_mask = master_bom_with_overage['MPN'] == mpn
+                    combined_mask = quote_mask & mpn_mask
+                    
+                    if combined_mask.any():
+                        master_bom_with_overage.loc[combined_mask, 'Req_Qty'] = buy_qty
+                        updates_made += combined_mask.sum()
+
+                # Show progress
+                blue_gradient_bar(processed_count + 1, processed_quotes, color_options[10])
+            
+            # Newline after progress bar
+            print()        
+            print(f"Processed {processed_quotes} quotes with purchasing data")
+            print(f"Made {updates_made} quantity updates to BOM")
+        else:
+            print("Skipping overage processing (apply_overage=False)")
         
         # Save updated BOM as CSV file (faster than Excel)
         updated_csv_path = 'SaveFiles/master_BOM.csv'
         master_bom_with_overage.to_csv(updated_csv_path, index=False)
-        print(f"Updated master BOM saved to: {updated_csv_path}")
+        
+        if apply_overage:
+            print(f"Master BOM with overage saved to: {updated_csv_path}")
+        else:
+            print(f"Master BOM (no overage applied) saved to: {updated_csv_path}")
             
     else:
         print("No master BOM data available to update")
+        master_bom_with_overage = pd.DataFrame()
 
     return master_bom_with_overage
 
@@ -786,7 +808,7 @@ def missing_purchase_parts_file(master_bom_df, LOG_MISSING_PURCH_PARTS, debug_ou
                 missing_parts_data.append(missing_part)
 
             # Show progress bar
-            blue_gradient_bar(counter, total_count)
+            blue_gradient_bar(counter, total_count, color_options[0])
         # Newline after progress bar
         print()
         print()
@@ -811,4 +833,953 @@ def missing_purchase_parts_file(master_bom_df, LOG_MISSING_PURCH_PARTS, debug_ou
         save_json_file([], LOG_MISSING_PURCH_PARTS)
 
 def missing_purchase_parts_designator_file(master_bom_df, LOG_MISSING_PURCH_PARTS_DESIGNATOR, debug_output=False):
-    pass
+    """
+    Creates a summary file of designators for missing purchase parts, grouped by work order.
+    
+    Args:
+        master_bom_df (pd.DataFrame): Master BOM DataFrame containing parts data
+        LOG_MISSING_PURCH_PARTS_DESIGNATOR (str): File path for saving designator summary JSON
+        debug_output (bool, optional): Whether to display sample data. Defaults to False.
+        
+    Returns:
+        None: Saves designator summary to JSON file. Groups designators by WO# and uses 
+              "many" if more than 10 designators per work order.
+    """
+    if not master_bom_df.empty:
+        print("Building missing purchase parts designator file...")
+        
+        # Dictionary to collect designators by WO#
+        wo_designators = {}
+        
+        for idx, row in master_bom_df.iterrows():
+            mpn = row.get('MPN', '')
+            cust_supplied = row.get('Cust_Supplied', '').lower()
+            req_qty = row.get('Req_Qty', '')
+            recvd_qty = row.get('Recvd_Qty', '')
+            wo_number = row.get('WO#', '')
+            
+            # Convert quantities to numeric for comparison, default to 0 if conversion fails
+            try:
+                req_qty_num = float(req_qty) if req_qty else 0
+            except (ValueError, TypeError):
+                req_qty_num = 0
+                
+            try:
+                recvd_qty_num = float(recvd_qty) if recvd_qty else 0
+            except (ValueError, TypeError):
+                recvd_qty_num = 0
+            
+            # Check conditions: MPN not PCB/Stencil, not customer supplied, received qty < required qty
+            if (mpn and 
+                mpn.upper() not in ['PCB', 'STENCIL'] and 
+                cust_supplied in ['false', 'no', ''] and 
+                recvd_qty_num < req_qty_num and
+                wo_number):
+                
+                # Extract first designator
+                designators = row.get('Designators', '')
+                first_designator = extract_first_designator(designators)
+                
+                if first_designator:
+                    # Initialize WO# entry if not exists
+                    if wo_number not in wo_designators:
+                        wo_designators[wo_number] = set()
+                    
+                    # Add designator to set (prevents duplicates)
+                    wo_designators[wo_number].add(first_designator)
+        
+        # Convert to list format for JSON output
+        designator_data = []
+        for wo_number, designator_set in wo_designators.items():
+            designator_list = sorted(list(designator_set))
+            
+            # If more than 10 designators, use "many"
+            if len(designator_list) > 10:
+                designator_string = "many"
+            else:
+                designator_string = ", ".join(designator_list)
+            
+            designator_data.append({
+                'WO#': wo_number,
+                'Designators': designator_string
+            })
+        
+        # Sort by WO# for consistent output
+        designator_data.sort(key=lambda x: x['WO#'])
+        
+        print(f"Found designators for {len(designator_data)} work orders")
+        
+        # Save to JSON file
+        designator_path = LOG_MISSING_PURCH_PARTS_DESIGNATOR
+        if save_json_file(designator_data, designator_path):
+            print(f"✓ Purchase parts designators saved: {designator_path}")
+        else:
+            print("✗ Failed to save purchase parts designator file")
+            
+        # Show sample data if debug enabled
+        if debug_output and designator_data:
+            print("\nSample purchase parts designators:")
+            for i, item in enumerate(designator_data[:3]):
+                print(f"  {i+1}: WO#{item['WO#']} - {item['Designators']}")
+                
+    else:
+        print("No master BOM data available to process purchase parts designators")
+        # Create empty file
+        save_json_file([], LOG_MISSING_PURCH_PARTS_DESIGNATOR)
+
+def missing_cust_parts_file(master_bom_df, LOG_MISSING_CUST_PARTS, debug_output=False):
+    """
+    Identifies and saves missing customer-supplied parts from the master BOM.
+    
+    Args:
+        master_bom_df (pd.DataFrame): Master BOM DataFrame to analyze
+        LOG_MISSING_CUST_PARTS (str): File path for saving missing customer parts JSON
+        debug_output (bool, optional): Whether to display sample data. Defaults to False.
+        
+    Returns:
+        None: Saves missing customer parts data to JSON file. Includes parts where
+              customer supplied is true and received quantity < required quantity.
+    """
+    if not master_bom_df.empty:
+        print("Building missing customer parts file...")
+        
+        # Filter the master BOM for missing customer parts
+        missing_customer_parts_data = []
+        
+        for idx, row in master_bom_df.iterrows():
+            mpn = row.get('MPN', '')
+            cust_supplied = row.get('Cust_Supplied', '').lower()
+            req_qty = row.get('Req_Qty', '')
+            recvd_qty = row.get('Recvd_Qty', '')
+            
+            # Convert quantities to numeric for comparison, default to 0 if conversion fails
+            try:
+                req_qty_num = float(req_qty) if req_qty else 0
+            except (ValueError, TypeError):
+                req_qty_num = 0
+                
+            try:
+                recvd_qty_num = float(recvd_qty) if recvd_qty else 0
+            except (ValueError, TypeError):
+                recvd_qty_num = 0
+            
+            # Check conditions: MPN not PCB/Stencil, customer supplied is true, received qty < required qty
+            if (mpn and 
+                mpn.upper() not in ['PCB', 'STENCIL'] and 
+                cust_supplied in ['true', 'yes'] and 
+                recvd_qty_num < req_qty_num):
+                
+                # Extract first designator from comma-separated list
+                designators = row.get('Designators', '')
+                first_designator = extract_first_designator(designators)
+                
+                # Create missing customer parts record
+                missing_customer_part = {
+                    'WO#': row.get('WO#', ''),
+                    'Quote#': row.get('Quote#', ''),
+                    'MPN': mpn,
+                    'Designator': first_designator,
+                    'Req_Qty': req_qty,
+                    'Recvd_Qty': recvd_qty
+                }
+                
+                missing_customer_parts_data.append(missing_customer_part)
+        
+        print(f"Found {len(missing_customer_parts_data)} missing customer parts")
+        
+        # Save to JSON file
+        missing_customer_parts_path = LOG_MISSING_CUST_PARTS
+        if save_json_file(missing_customer_parts_data, missing_customer_parts_path):
+            print(f"✓ Missing customer parts saved: {missing_customer_parts_path}")
+        else:
+            print("✗ Failed to save missing customer parts file")
+            
+        # Show sample data if debug enabled
+        if debug_output and missing_customer_parts_data:
+            print("\nSample missing customer parts:")
+            for i, part in enumerate(missing_customer_parts_data[:3]):
+                print(f"  {i+1}: {part}")
+                
+    else:
+        print("No master BOM data available to process missing customer parts")
+        # Create empty file
+        save_json_file([], LOG_MISSING_CUST_PARTS)
+
+def missing_cust_parts_designator_file(master_bom_df, LOG_MISSING_CUST_PARTS_DESIGNATOR, debug_output=False):
+    """
+    Creates a summary file of designators for missing customer parts, grouped by work order.
+    
+    Args:
+        master_bom_df (pd.DataFrame): Master BOM DataFrame containing parts data
+        LOG_MISSING_CUST_PARTS_DESIGNATOR (str): File path for saving customer designator summary JSON
+        debug_output (bool, optional): Whether to display sample data. Defaults to False.
+        
+    Returns:
+        None: Saves customer designator summary to JSON file. Groups designators by WO# 
+              and uses "many" if more than 10 designators per work order.
+    """
+    if not master_bom_df.empty:
+        print("Building missing customer parts designator file...")
+        
+        # Dictionary to collect designators by WO#
+        wo_customer_designators = {}
+        
+        for idx, row in master_bom_df.iterrows():
+            mpn = row.get('MPN', '')
+            cust_supplied = row.get('Cust_Supplied', '').lower()
+            req_qty = row.get('Req_Qty', '')
+            recvd_qty = row.get('Recvd_Qty', '')
+            wo_number = row.get('WO#', '')
+            
+            # Convert quantities to numeric for comparison, default to 0 if conversion fails
+            try:
+                req_qty_num = float(req_qty) if req_qty else 0
+            except (ValueError, TypeError):
+                req_qty_num = 0
+                
+            try:
+                recvd_qty_num = float(recvd_qty) if recvd_qty else 0
+            except (ValueError, TypeError):
+                recvd_qty_num = 0
+            
+            # Check conditions: MPN not PCB/Stencil, customer supplied is true, received qty < required qty
+            if (mpn and 
+                mpn.upper() not in ['PCB', 'STENCIL'] and 
+                cust_supplied in ['true', 'yes'] and 
+                recvd_qty_num < req_qty_num and
+                wo_number):
+                
+                # Extract first designator
+                designators = row.get('Designators', '')
+                first_designator = extract_first_designator(designators)
+                
+                if first_designator:
+                    # Initialize WO# entry if not exists
+                    if wo_number not in wo_customer_designators:
+                        wo_customer_designators[wo_number] = set()
+                    
+                    # Add designator to set (prevents duplicates)
+                    wo_customer_designators[wo_number].add(first_designator)
+        
+        # Convert to list format for JSON output
+        customer_designator_data = []
+        for wo_number, designator_set in wo_customer_designators.items():
+            designator_list = sorted(list(designator_set))
+            
+            # If more than 10 designators, use "many"
+            if len(designator_list) > 10:
+                designator_string = "many"
+            else:
+                designator_string = ", ".join(designator_list)
+            
+            customer_designator_data.append({
+                'WO#': wo_number,
+                'Designators': designator_string
+            })
+        
+        # Sort by WO# for consistent output
+        customer_designator_data.sort(key=lambda x: x['WO#'])
+        
+        print(f"Found customer designators for {len(customer_designator_data)} work orders")
+        
+        # Save to JSON file
+        customer_designator_path = LOG_MISSING_CUST_PARTS_DESIGNATOR
+        if save_json_file(customer_designator_data, customer_designator_path):
+            print(f"✓ Customer parts designators saved: {customer_designator_path}")
+        else:
+            print("✗ Failed to save customer parts designator file")
+            
+        # Show sample data if debug enabled
+        if debug_output and customer_designator_data:
+            print("\nSample customer parts designators:")
+            for i, item in enumerate(customer_designator_data[:3]):
+                print(f"  {i+1}: WO#{item['WO#']} - {item['Designators']}")
+                
+    else:
+        print("No master BOM data available to process customer parts designators")
+        # Create empty file
+        save_json_file([], LOG_MISSING_CUST_PARTS_DESIGNATOR)
+
+def missing_pcb_file(master_bom_df, LOG_PCB_STATUS, debug_output=False):
+    """
+    Analyzes master BOM to determine PCB completion status for each work order.
+    
+    Args:
+        master_bom_df (pd.DataFrame): Master BOM DataFrame containing PCB status data
+        LOG_PCB_STATUS (str): File path for saving PCB status JSON
+        debug_output (bool, optional): Whether to display sample data. Defaults to False.
+        
+    Returns:
+        None: Saves PCB status data to JSON file. Status is "Complete" if Date_Complete
+              contains a valid date, otherwise "None".
+    """
+    if not master_bom_df.empty:
+        print("Building PCB status file...")
+        
+        # Dictionary to collect PCB status by WO#
+        wo_pcb_status = {}
+        
+        for idx, row in master_bom_df.iterrows():
+            part_number = row.get('Part_Number', '').upper()
+            wo_number = row.get('WO#', '')
+            date_complete = row.get('Date_Complete', '')
+            
+            # Check if this is a PCB part
+            if part_number == 'PCB' and wo_number:
+                # Check if Date_Complete contains a date
+                pcb_status = "None"  # Default status
+                
+                if date_complete and str(date_complete).strip() and str(date_complete).lower() not in ['null', 'none', '']:
+                    # Try to parse as date to verify it's actually a date
+                    try:
+                        # Check if it looks like a date (contains numbers and date separators)
+                        date_str = str(date_complete).strip()
+                        if any(char.isdigit() for char in date_str) and any(sep in date_str for sep in ['-', '/', ':', ' ']):
+                            # Attempt to parse the date
+                            pd.to_datetime(date_str)
+                            pcb_status = "Complete"
+                    except (ValueError, TypeError):
+                        # If parsing fails, keep as "None"
+                        pcb_status = "None"
+                
+                # Store the status (overwrites if multiple PCB entries for same WO#)
+                wo_pcb_status[wo_number] = pcb_status
+        
+        # Convert to list format for JSON output
+        pcb_status_data = []
+        for wo_number, status in wo_pcb_status.items():
+            pcb_status_data.append({
+                'WO#': wo_number,
+                'Status': status
+            })
+        
+        # Sort by WO# for consistent output
+        pcb_status_data.sort(key=lambda x: x['WO#'])
+        
+        print(f"Found PCB status for {len(pcb_status_data)} work orders")
+        
+        # Count statuses for summary
+        complete_count = sum(1 for item in pcb_status_data if item['Status'] == 'Complete')
+        none_count = sum(1 for item in pcb_status_data if item['Status'] == 'None')
+        print(f"PCB Complete: {complete_count}, PCB None: {none_count}")
+        
+        # Save to JSON file
+        pcb_status_path = LOG_PCB_STATUS
+        if save_json_file(pcb_status_data, pcb_status_path):
+            print(f"✓ PCB status saved: {pcb_status_path}")
+        else:
+            print("✗ Failed to save PCB status file")
+            
+        # Show sample data if debug enabled
+        if debug_output and pcb_status_data:
+            print("\nSample PCB status:")
+            for i, item in enumerate(pcb_status_data[:5]):
+                print(f"  {i+1}: WO#{item['WO#']} - {item['Status']}")
+                
+    else:
+        print("No master BOM data available to process PCB status")
+        # Create empty file
+        save_json_file([], LOG_PCB_STATUS)
+
+def missing_stencil_file(master_bom_df, LOG_STENCIL_STATUS, debug_output=False):
+    """
+    Analyzes master BOM to determine stencil completion status for each work order.
+    
+    Args:
+        master_bom_df (pd.DataFrame): Master BOM DataFrame containing stencil status data
+        LOG_STENCIL_STATUS (str): File path for saving stencil status JSON
+        debug_output (bool, optional): Whether to display sample data. Defaults to False.
+        
+    Returns:
+        None: Saves stencil status data to JSON file. Status is "Complete" if Date_Complete
+              contains a valid date, otherwise "None".
+    """
+    if not master_bom_df.empty:
+        print("Building stencil status file...")
+        
+        # Dictionary to collect stencil status by WO#
+        wo_stencil_status = {}
+        
+        for idx, row in master_bom_df.iterrows():
+            part_number = row.get('Part_Number', '').upper()
+            wo_number = row.get('WO#', '')
+            date_complete = row.get('Date_Complete', '')
+            
+            # Check if this is a stencil part
+            if part_number == 'STENCIL' and wo_number:
+                # Check if Date_Complete contains a date
+                stencil_status = "None"  # Default status
+                
+                if date_complete and str(date_complete).strip() and str(date_complete).lower() not in ['null', 'none', '']:
+                    # Try to parse as date to verify it's actually a date
+                    try:
+                        # Check if it looks like a date (contains numbers and date separators)
+                        date_str = str(date_complete).strip()
+                        if any(char.isdigit() for char in date_str) and any(sep in date_str for sep in ['-', '/', ':', ' ']):
+                            # Attempt to parse the date
+                            pd.to_datetime(date_str)
+                            stencil_status = "Complete"
+                    except (ValueError, TypeError):
+                        # If parsing fails, keep as "None"
+                        stencil_status = "None"
+                
+                # Store the status (overwrites if multiple stencil entries for same WO#)
+                wo_stencil_status[wo_number] = stencil_status
+        
+        # Convert to list format for JSON output
+        stencil_status_data = []
+        for wo_number, status in wo_stencil_status.items():
+            stencil_status_data.append({
+                'WO#': wo_number,
+                'Status': status
+            })
+        
+        # Sort by WO# for consistent output
+        stencil_status_data.sort(key=lambda x: x['WO#'])
+        
+        print(f"Found stencil status for {len(stencil_status_data)} work orders")
+        
+        # Count statuses for summary
+        complete_count = sum(1 for item in stencil_status_data if item['Status'] == 'Complete')
+        none_count = sum(1 for item in stencil_status_data if item['Status'] == 'None')
+        print(f"Stencil Complete: {complete_count}, Stencil None: {none_count}")
+        
+        # Save to JSON file
+        stencil_status_path = LOG_STENCIL_STATUS
+        if save_json_file(stencil_status_data, stencil_status_path):
+            print(f"✓ Stencil status saved: {stencil_status_path}")
+        else:
+            print("✗ Failed to save stencil status file")
+            
+        # Show sample data if debug enabled
+        if debug_output and stencil_status_data:
+            print("\nSample stencil status:")
+            for i, item in enumerate(stencil_status_data[:5]):
+                print(f"  {i+1}: WO#{item['WO#']} - {item['Status']}")
+                
+    else:
+        print("No master BOM data available to process stencil status")
+        # Create empty file
+        save_json_file([], LOG_STENCIL_STATUS)
+
+def parts_po_file(active_jobs, ASSEMBLY_ACTIVE_DIRECTORY, LOG_PO_NUMBERS, debug_output=False):
+    """
+    Extracts PO numbers from R4_RECEIVING_BOM files for active jobs and saves to JSON.
+    
+    Args:
+        active_jobs (list): List of active job dictionaries containing WO# information
+        ASSEMBLY_ACTIVE_DIRECTORY (str): Path to directory containing assembly job folders
+        LOG_PO_NUMBERS (str): File path for saving PO numbers JSON
+        debug_output (bool, optional): Whether to display sample data. Defaults to False.
+        
+    Returns:
+        None: Saves PO numbers data to JSON file. Each record contains WO# and 
+              comma-separated string of PO numbers found in R4_RECEIVING_BOM files.
+    """
+    if active_jobs:
+        print("Building PO numbers file...")
+        
+        # Dictionary to collect PO numbers by WO#
+        wo_po_numbers = {}
+        
+        # Get all directories in ASSEMBLY_ACTIVE_DIRECTORY
+        if os.path.exists(ASSEMBLY_ACTIVE_DIRECTORY):
+            directories = [d for d in os.listdir(ASSEMBLY_ACTIVE_DIRECTORY) 
+                          if os.path.isdir(os.path.join(ASSEMBLY_ACTIVE_DIRECTORY, d))]
+            
+            total_active_jobs = len(active_jobs)
+            processed_count = 0
+            
+            for idx, job in enumerate(active_jobs):
+                wo_number = job.get('WO#', '')
+                
+                if wo_number:
+                    # Find directory that contains the WO# (with preceding character)
+                    matching_dir = None
+                    for directory in directories:
+                        if wo_number in directory:
+                            matching_dir = directory
+                            break
+                    
+                    if matching_dir:
+                        dir_path = os.path.join(ASSEMBLY_ACTIVE_DIRECTORY, matching_dir)
+                        
+                        try:
+                            # Find R4_RECEIVING_BOM file in the directory
+                            files = os.listdir(dir_path)
+                            receiving_bom_files = [f for f in files if 'R4_RECEIVING_BOM' in f]
+                            
+                            if receiving_bom_files:
+                                # Use the first R4_RECEIVING_BOM file found
+                                receiving_bom_file = receiving_bom_files[0]
+                                receiving_bom_path = os.path.join(dir_path, receiving_bom_file)
+                                
+                                # Parse the R4_RECEIVING_BOM file
+                                po_numbers = set()  # Use set to store unique values
+                                
+                                try:
+                                    with open(receiving_bom_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                        lines = f.readlines()
+                                        
+                                    for line in lines:
+                                        line = line.strip()
+                                        if line and '|' in line:
+                                            # Split by pipe delimiter and get first value
+                                            parts = line.split('|')
+                                            if parts:
+                                                first_value = parts[0].strip()
+                                                
+                                                # Try to convert to integer
+                                                try:
+                                                    po_number = int(first_value)
+                                                    po_numbers.add(po_number)
+                                                except (ValueError, TypeError):
+                                                    # Not an integer, skip
+                                                    continue
+                                    
+                                    # Store PO numbers for this WO# if any found
+                                    if po_numbers:
+                                        # Convert set to sorted list for consistent output
+                                        po_list = sorted(list(po_numbers))
+                                        wo_po_numbers[wo_number] = po_list
+                                        processed_count += 1
+                                        
+                                except Exception as e:
+                                    print(f"Error reading R4_RECEIVING_BOM file {receiving_bom_path}: {e}")
+                                    continue
+                                    
+                        except Exception as e:
+                            print(f"Error accessing directory {dir_path}: {e}")
+                            continue
+                
+                # Show progress
+                blue_gradient_bar(idx + 1, total_active_jobs, color_options[5])
+            
+            # Newline after progress bar
+            print()
+            print(f"Processed {processed_count} work orders with R4_RECEIVING_BOM files")
+            
+            # Convert to list format for JSON output
+            po_numbers_data = []
+            for wo_number, po_list in wo_po_numbers.items():
+                # Create comma-separated string of PO numbers
+                po_string = ", ".join(map(str, po_list))
+                
+                po_numbers_data.append({
+                    'WO#': wo_number,
+                    'PO_Numbers': po_string
+                })
+            
+            # Sort by WO# for consistent output
+            po_numbers_data.sort(key=lambda x: x['WO#'])
+            
+            print(f"Found PO numbers for {len(po_numbers_data)} work orders")
+            
+            # Save to JSON file
+            po_numbers_path = LOG_PO_NUMBERS
+            if save_json_file(po_numbers_data, po_numbers_path):
+                print(f"✓ PO numbers saved: {po_numbers_path}")
+            else:
+                print("✗ Failed to save PO numbers file")
+                
+            # Show sample data if debug enabled
+            if debug_output and po_numbers_data:
+                print("\nSample PO numbers:")
+                for i, item in enumerate(po_numbers_data[:5]):
+                    print(f"  {i+1}: WO#{item['WO#']} - {item['PO_Numbers']}")
+                    
+        else:
+            print(f"Assembly directory not found: {ASSEMBLY_ACTIVE_DIRECTORY}")
+            # Create empty file
+            save_json_file([], LOG_PO_NUMBERS)
+            
+    else:
+        print("No active jobs data available to process PO numbers")
+        # Create empty file
+        save_json_file([], LOG_PO_NUMBERS)
+
+def refine_active_jobs(save_dir,
+                       LOG_ACTIVE_JOBS,
+                       LOG_MISSING_CUST_PARTS,
+                       LOG_MISSING_PURCH_PARTS,
+                       LOG_PCB_STATUS,
+                       LOG_STENCIL_STATUS):
+    """
+    Refines the active jobs list by filtering based on completion criteria and adds internal status tracking.
+    
+    Args:
+        save_dir (str): Directory path for saving refined results
+        LOG_ACTIVE_JOBS (str): File path to active jobs JSON
+        LOG_MISSING_CUST_PARTS (str): File path to missing customer parts JSON
+        LOG_MISSING_PURCH_PARTS (str): File path to missing purchase parts JSON
+        LOG_PCB_STATUS (str): File path to PCB status JSON
+        LOG_STENCIL_STATUS (str): File path to stencil status JSON
+        
+    Returns:
+        None: Updates active jobs file and creates Excel file. Jobs are kept if they have
+              missing parts, incomplete PCBs, or incomplete stencils. Adds internal_status field.
+    """
+    # Load log files
+    missing_cust_parts = load_json_file(LOG_MISSING_CUST_PARTS, default_value=[])
+    missing_purch_parts = load_json_file(LOG_MISSING_PURCH_PARTS, default_value=[])
+    pcb_status = load_json_file(LOG_PCB_STATUS, default_value=[])
+    stencil_status = load_json_file(LOG_STENCIL_STATUS, default_value=[])
+
+    # Build sets for fast lookup
+    wo_missing_cust = {entry.get('WO#') for entry in missing_cust_parts if entry.get('WO#')}
+    wo_missing_purch = {entry.get('WO#') for entry in missing_purch_parts if entry.get('WO#')}
+    pcb_status_dict = {entry.get('WO#'): entry.get('Status') for entry in pcb_status if entry.get('WO#')}
+    stencil_status_dict = {entry.get('WO#'): entry.get('Status') for entry in stencil_status if entry.get('WO#')}
+
+    # Load active jobs
+    active_jobs_data = load_json_file(LOG_ACTIVE_JOBS, default_value=[])
+
+    refined_active_jobs = []
+    for job in active_jobs_data:
+        wo_number = job.get('WO#', '')
+        reasons = []
+
+        # Criteria 1: Missing customer parts
+        if wo_number in wo_missing_cust:
+            reasons.append("missing_customer_parts")
+
+        # Criteria 2: Missing purchase parts
+        if wo_number in wo_missing_purch:
+            reasons.append("missing_purchase_parts")
+
+        # Criteria 3: PCB status not complete
+        pcb_stat = pcb_status_dict.get(wo_number, None)
+        if pcb_stat != "Complete":
+            reasons.append("pcb_incomplete")
+
+        # Criteria 4: Stencil status not complete
+        stencil_stat = stencil_status_dict.get(wo_number, None)
+        if stencil_stat != "Complete":
+            reasons.append("stencil_incomplete")
+
+        # If any reason applies, keep the job and set internal_status
+        if reasons:
+            job['internal_status'] = ", ".join(reasons)
+            refined_active_jobs.append(job)
+
+        # Otherwise, remove from active jobs
+
+    # Save refined active jobs back to LOG_ACTIVE_JOBS
+    save_json_file(refined_active_jobs, LOG_ACTIVE_JOBS, create_dir=True)
+    print(f"Refined active jobs: {len(refined_active_jobs)} records remain")
+
+    # Save refined active jobs as Excel file for review
+    refined_active_jobs_excel_path = os.path.join(save_dir, "refined_active_jobs.xlsx")
+    pd.DataFrame(refined_active_jobs).to_excel(refined_active_jobs_excel_path, index=False)
+    print(f"Refined active jobs Excel saved: {refined_active_jobs_excel_path}")
+
+def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs: list):
+    """
+    Generates an Excel file with job statistics and active jobs detail for reporting purposes.
+    
+    Args:
+        cam_data (list): List of all CAM data records for total count
+        active_jobs (list): List of active job records
+        credit_hold_jobs (list): List of credit hold job records
+        
+    Returns:
+        None: Creates 'SaveFiles/job_statistics.xlsx' with two sheets:
+              - Job Statistics: Summary counts
+              - Active Jobs Detail: Detailed active jobs information
+    """
+    print("Generating job statistics Excel file...")
+    
+    # Step 1: Initialize and calculate statistics
+    blue_gradient_bar(1, 4, color_options[3])
+    job_statistics = {
+        "total_jobs": 0,
+        "active_jobs": 0,
+        "credit_hold_jobs": 0
+    }
+
+    # Update statistics based on processed jobs
+    job_statistics["total_jobs"] = len(cam_data)
+    job_statistics["active_jobs"] = len(active_jobs)
+    job_statistics["credit_hold_jobs"] = len(credit_hold_jobs)
+
+    # Step 2: Prepare Excel file
+    blue_gradient_bar(2, 4, color_options[4])
+    excel_file_path = 'SaveFiles/job_statistics.xlsx'
+
+    # Create Excel writer object
+    with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
+        
+        # Step 3: Create Sheet 1 - Job Statistics Summary
+        blue_gradient_bar(3, 4, color_options[5])
+        stats_df = pd.DataFrame([
+            {'Metric': 'Total Jobs', 'Count': job_statistics["total_jobs"]},
+            {'Metric': 'Active Jobs', 'Count': job_statistics["active_jobs"]}, 
+            {'Metric': 'Credit Hold Jobs', 'Count': job_statistics["credit_hold_jobs"]}
+        ])
+        stats_df.to_excel(writer, sheet_name='Job Statistics', index=False)
+        
+        # Step 4: Create Sheet 2 - Active Jobs Detail from active jobs log file
+        blue_gradient_bar(4, 4, color_options[6])
+        try:
+            with open('SaveFiles/log_active_jobs.json', 'r') as file:
+                active_jobs_data = json.load(file)
+            
+            # Create DataFrame with specified columns
+            if active_jobs_data:
+                active_jobs_df = pd.DataFrame([
+                    {
+                        'WO#': job.get('WO#', ''),
+                        'Quote#': job.get('Quote#', ''),
+                        'Status': job.get('Status', ''),
+                        'Order Date': job.get('Order Date', ''),
+                        'Customer': job.get('Customer', '')
+                    }
+                    for job in active_jobs_data
+                ])
+            else:
+                # Create empty DataFrame with headers if no data
+                active_jobs_df = pd.DataFrame(columns=['WO#', 'Quote#', 'Status', 'Order Date', 'Customer'])
+            
+            active_jobs_df.to_excel(writer, sheet_name='Active Jobs Detail', index=False)
+            
+        except FileNotFoundError:
+            # If active jobs file doesn't exist, create empty sheet
+            empty_df = pd.DataFrame(columns=['WO#', 'Quote#', 'Status', 'Order Date', 'Customer'])
+            empty_df.to_excel(writer, sheet_name='Active Jobs Detail', index=False)
+
+    # Complete - show final results
+    print(f"Job statistics Excel file created: {excel_file_path}")
+    print(f"Sheet 1: Job Statistics Summary with {len(stats_df)} metrics")
+    if 'active_jobs_data' in locals():
+        print(f"Sheet 2: Active Jobs Detail with {len(active_jobs_data)} records")
+
+def build_smartsheet_upload_df(LOG_ACTIVE_JOBS,
+                               LOG_USER_ENTERED_DATA,
+                               LOG_PO_NUMBERS,
+                               LOG_PURCH_DESIGNATOR,
+                               LOG_CUSTOMER_DESIGNATORS,
+                               LOG_MISSING_PURCH_PARTS,
+                               LOG_MISSING_CUST_PARTS,
+                               LOG_PCB_STATUS,
+                               LOG_STENCIL_STATUS):
+    """
+    Builds a DataFrame for Smartsheet upload by combining data from multiple log files.
+    
+    Args:
+        LOG_ACTIVE_JOBS (str): Path to active jobs JSON file
+        LOG_USER_ENTERED_DATA (str): Path to user-entered data JSON file  
+        LOG_PO_NUMBERS (str): Path to PO numbers JSON file
+        LOG_PURCH_DESIGNATOR (str): Path to purchase designators JSON file
+        LOG_CUSTOMER_DESIGNATORS (str): Path to customer designators JSON file
+        LOG_MISSING_PURCH_PARTS (str): Path to missing purchase parts JSON file
+        LOG_MISSING_CUST_PARTS (str): Path to missing customer parts JSON file
+        LOG_PCB_STATUS (str): Path to PCB status JSON file
+        LOG_STENCIL_STATUS (str): Path to stencil status JSON file
+        
+    Returns:
+        pd.DataFrame: Formatted DataFrame ready for Smartsheet upload with all relevant
+                      job tracking information, status indicators, and refresh timestamps.
+    """
+    # Load log_active_jobs.json
+    active_jobs_data = load_json_file(LOG_ACTIVE_JOBS, default_value=[])
+
+    # Load user entered data
+    user_entered_data = load_json_file(LOG_USER_ENTERED_DATA, default_value=[])
+    wo_user_data = {entry.get('WO#'): entry for entry in user_entered_data if entry.get('WO#')}
+
+    # Load PO numbers data
+    po_numbers_data = load_json_file(LOG_PO_NUMBERS, default_value=[])
+    wo_po_numbers = {entry.get('WO#'): entry.get('PO_Numbers', '') for entry in po_numbers_data if entry.get('WO#')}
+
+    # Load designator data
+    purch_designator_data = load_json_file(LOG_PURCH_DESIGNATOR, default_value=[])
+    wo_purch_designators = {entry.get('WO#'): entry.get('Designators', '') for entry in purch_designator_data if entry.get('WO#')}
+
+    cust_designator_data = load_json_file(LOG_CUSTOMER_DESIGNATORS, default_value=[])
+    wo_cust_designators = {entry.get('WO#'): entry.get('Designators', '') for entry in cust_designator_data if entry.get('WO#')}
+
+    # Load missing parts data
+    missing_purch_parts = load_json_file(LOG_MISSING_PURCH_PARTS, default_value=[])
+    wo_missing_purch = {entry.get('WO#') for entry in missing_purch_parts if entry.get('WO#')}
+
+    missing_cust_parts = load_json_file(LOG_MISSING_CUST_PARTS, default_value=[])
+    wo_missing_cust = {entry.get('WO#') for entry in missing_cust_parts if entry.get('WO#')}
+
+    # Load PCB and Stencil status data
+    pcb_status_data = load_json_file(LOG_PCB_STATUS, default_value=[])
+    pcb_status_dict = {entry.get('WO#'): entry.get('Status', '') for entry in pcb_status_data if entry.get('WO#')}
+
+    stencil_status_data = load_json_file(LOG_STENCIL_STATUS, default_value=[])
+    stencil_status_dict = {entry.get('WO#'): entry.get('Status', '') for entry in stencil_status_data if entry.get('WO#')}
+
+    # Start with log_active_jobs.json as base
+    update_rows = []
+    current_datetime = datetime.now()
+
+    for job in active_jobs_data:
+        wo_number = job.get("WO#", "")
+        user_data = wo_user_data.get(wo_number, {})
+        pur_part_val = "P" if wo_number in wo_missing_purch else ""
+        cus_part_val = "C" if wo_number in wo_missing_cust else ""
+        pcb_val = "PCB" if pcb_status_dict.get(wo_number, "") != "Complete" else ""
+        stencil_val = "ST" if stencil_status_dict.get(wo_number, "") != "Complete" else ""
+
+        row = {
+            "Sales Order Date": format_mmddyy(job.get("Order Date", "")),
+            "Turn": job.get("Turn", ""),
+            "Due Date": format_mmddyy(job.get("Ship Date", "")),
+            "WO#": job.get("WO#", ""),
+            "Quote #": job.get("Quote#", ""),
+            "Customer": job.get("Customer", ""),
+            "Date and Action": user_data.get("Date and Action", ""),
+            "Purchase Order": wo_po_numbers.get(wo_number, ""),
+            "Purch Des": wo_purch_designators.get(wo_number, ""),
+            "Cust Des": wo_cust_designators.get(wo_number, ""),
+            "spacer": "",
+            "Pur Part": pur_part_val,
+            "Cus Part": cus_part_val,
+            "PCB": pcb_val,
+            "Stencil": stencil_val,
+            "spacer2": "",
+            "Additional Notes": user_data.get("Additional Notes", ""),
+            "Refresh Date": format_mmddyy(current_datetime.strftime('%m/%d/%y')),
+            "Refresh Time": current_datetime.strftime('%I:%M %p')
+        }
+        update_rows.append(row)
+
+    # Create DataFrame
+    smartsheet_update_df = pd.DataFrame(update_rows, columns=smartsheet_headers)
+
+    # Sort the data: rows with "Pur Part" values first, then by oldest due date at top
+    if not smartsheet_update_df.empty:
+        # Create a sorting helper column - 0 for rows with Pur Part values, 1 for empty
+        smartsheet_update_df['pur_part_sort'] = smartsheet_update_df['Pur Part'].apply(lambda x: 0 if x else 1)
+        
+        # Convert Due Date to datetime for proper sorting
+        smartsheet_update_df['due_date_sort'] = pd.to_datetime(smartsheet_update_df['Due Date'], errors='coerce')
+        
+        # Handle NaT values by replacing them with a future date for sorting purposes
+        max_date = pd.to_datetime('2099-12-31')
+        smartsheet_update_df['due_date_sort'] = smartsheet_update_df['due_date_sort'].fillna(max_date)
+        
+        # Sort: Pur Part values first (0), then by due date ascending (oldest first)
+        smartsheet_update_df = smartsheet_update_df.sort_values(
+            ['pur_part_sort', 'due_date_sort'], 
+            ascending=[True, True]
+        )
+        
+        # Drop the helper columns
+        smartsheet_update_df = smartsheet_update_df.drop(['pur_part_sort', 'due_date_sort'], axis=1)
+
+    # Show sample for review
+    print("Sample Smartsheet update DataFrame:")
+    print(smartsheet_update_df.head())
+
+    return smartsheet_update_df
+
+def update_smartsheet(smartsheet_update_df, 
+                      smartsheet_client, 
+                      assembly_part_tracking_id, 
+                      smartsheet_part_tracking_df, 
+                      smartsheet_sheet):
+    """
+    Updates Smartsheet by replacing all data with new formatted data including conditional formatting.
+    
+    Args:
+        smartsheet_update_df (pd.DataFrame): DataFrame containing new data to upload
+        smartsheet_client: Authenticated Smartsheet client object
+        assembly_part_tracking_id (str): Smartsheet ID for the target sheet
+        smartsheet_part_tracking_df (pd.DataFrame): Current Smartsheet data for row ID extraction
+        smartsheet_sheet: Smartsheet sheet object for column mapping
+        
+    Returns:
+        None: Deletes all existing rows and adds new rows with formatting applied.
+              Applies color coding for status indicators and due dates.
+    """
+    # Get all row IDs from the current Smartsheet
+    if '_row_id' in smartsheet_part_tracking_df.columns:
+        all_row_ids = smartsheet_part_tracking_df['_row_id'].tolist()
+    else:
+        all_row_ids = []
+
+    # Delete all rows in batches
+    print(f"Deleting {len(all_row_ids)} rows from Smartsheet in batches of {DELETE_BATCH_SIZE}...")
+    for i in range(0, len(all_row_ids), DELETE_BATCH_SIZE):
+        batch_ids = all_row_ids[i:i+DELETE_BATCH_SIZE]
+        if batch_ids:
+            smartsheet_client.Sheets.delete_rows(assembly_part_tracking_id, batch_ids)
+            print(f"Deleted rows {i+1} to {i+len(batch_ids)}")
+
+    # Replace NaN values with empty strings before uploading to Smartsheet
+    smartsheet_update_df = smartsheet_update_df.replace({np.nan: ""})
+
+    # Sort the DataFrame: empty 'Pur Part' first, then by 'Sales Order Date' descending
+    # smartsheet_update_df['pur_part_sort'] = smartsheet_update_df['Pur Part'].apply(lambda x: 0 if x == '' else 1)
+    # smartsheet_update_df = smartsheet_update_df.sort_values(['pur_part_sort', 'Sales Order Date'], ascending=[True, False])
+    # smartsheet_update_df = smartsheet_update_df.drop('pur_part_sort', axis=1)
+
+    # Prepare new rows for Smartsheet
+    new_rows = []
+    format_part_columns = ['Pur Part', 'Cus Part', 'PCB', 'Stencil']
+    format_turn_column = 'Turn'
+    format_due_column = 'Due Date'
+
+    for idx, row in smartsheet_update_df.iterrows():
+        cells = []
+        for col in smartsheet_update_df.columns:
+            col_id = smartsheet_sheet.columns[smartsheet_update_df.columns.get_loc(col)].id
+            cell = smartsheet.models.Cell()
+            cell.column_id = col_id
+            cell.value = row[col]
+
+            # Apply formatting for part status columns (Pur Part, Cus Part, PCB, Stencil)
+            if col in format_part_columns:
+                if row[col]:  # If there is text in the cell
+                    cell.format = ",,,,,,,,2,19,,0,,,,0,"   # White text, red background for active status
+                else:  # If cell is empty
+                    cell.format = ",,,,,,,,14,14,,0,,,,0,"  # Green text and background
+        
+            # Apply formatting for Turn column
+            if col == format_turn_column:
+                turn_value = str(row[col]).strip().upper()
+                turn_num = float(turn_value)
+                if turn_num >= 7:
+                    cell.format = ",,,,,,,,,9,,0,,,,0,"
+                else:
+                    cell.format = ",,,,,,,,,0,,0,,,,0,"
+
+            # Apply formatting for Due Date column
+            if col == format_due_column:
+                try:
+                    due_date = pd.to_datetime(row[col], errors='coerce')
+
+                    if pd.notnull(due_date):
+                        today = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
+                        delta_days = (due_date - today).days
+
+                        cell.format = ",,,,,,,,40,2,,0,,,,0,"   # Purple text, white background
+                        
+                        if delta_days < 0:
+                            cell.format = ",,,,,,,,2,19,,0,,,,0,"   # White text, red background
+                        elif delta_days <= 3:
+                            cell.format = ",,,,,,,,2,28,,0,,,,0,"   # White text, orange background
+
+                except Exception as ex:
+                    print(f"DEBUG: Exception in due date formatting: {ex}")
+                    
+            cells.append(cell)
+        new_row = smartsheet.models.Row()
+        new_row.to_top = True
+        new_row.cells = cells
+        new_rows.append(new_row)
+
+    # Add new rows in batches
+    print(f"Adding {len(new_rows)} rows to Smartsheet in batches of {ADD_BATCH_SIZE}...")
+    for i in range(0, len(new_rows), ADD_BATCH_SIZE):
+        batch_rows = new_rows[i:i+ADD_BATCH_SIZE]
+        smartsheet_client.Sheets.add_rows(assembly_part_tracking_id, batch_rows)
+        print(f"Added rows {i+1} to {i+len(batch_rows)}")
+
+    print("Smartsheet update complete.")
+
+
