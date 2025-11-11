@@ -1769,7 +1769,7 @@ def update_smartsheet(smartsheet_update_df,
                     
             cells.append(cell)
         new_row = smartsheet.models.Row()
-        new_row.to_top = True
+        new_row.to_bottom = True
         new_row.cells = cells
         new_rows.append(new_row)
 
