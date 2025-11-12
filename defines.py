@@ -28,6 +28,9 @@ smartsheet_headers = [
 DELETE_BATCH_SIZE = 100
 ADD_BATCH_SIZE = 100
 
+# Progress bar settings
+USE_COLOR_PROGRESS_BAR = False  # Set to False for basic ASCII progress bar without colors
+
 bar_len = 100 # Progress bar length
 
 delete_batch_size = 240  # Delete smartsheet batch size

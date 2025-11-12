@@ -11,48 +11,58 @@ import numpy as np
 import smartsheet
 
 from defines import *
-from local_secrets import PASSWORD_FILE_PATH, ENCRYPTED_KEY_PATH
+from local_secrets import PASSWORD_FILE_PATH, ENCRYPTED_KEY_PATH, SQL_PASSWORD_PATH, SQL_PASSWORD_KEY_PATH
 
-def blue_gradient_bar(progress, total, end_color=None):
+def blue_gradient_bar(progress, total, end_color=None, use_color=False):
     """
-    Prints a gradient progress bar to the terminal with customizable end color.
+    Prints a progress bar to the terminal with optional color gradient.
     
     Args:
         progress (int): Current progress value
         total (int): Total steps/maximum progress value
         end_color (tuple, optional): RGB tuple for end color. If None, a random vibrant color is chosen.
+        use_color (bool, optional): Whether to use colored gradient bar. If False, uses basic ASCII progress bar.
+                                   Defaults to True.
     
     Returns:
         None: Prints progress bar directly to terminal
     """
-    # Light blue (start): RGB(173, 216, 230)
-    # Dark blue (end):   RGB(0, 0, 139)
-    start_rgb = (173, 216, 230)
-    
-    # If no end color specified, generate a random vibrant color
-    if end_color is None:
-        # Generate random vibrant colors by ensuring at least one RGB component is high
-        end_rgb = random.choice(color_options)
-    else:
-        end_rgb = end_color
-
-    filled_len = int(bar_len * progress // total) if total else bar_len
-    bar = ""
-    for i in range(bar_len):
-        # Interpolate color
-        ratio = i / (bar_len - 1) if bar_len > 1 else 0
-        r = int(start_rgb[0] + (end_rgb[0] - start_rgb[0]) * ratio)
-        g = int(start_rgb[1] + (end_rgb[1] - start_rgb[1]) * ratio)
-        b = int(start_rgb[2] + (end_rgb[2] - start_rgb[2]) * ratio)
-        color = f"\033[38;2;{r};{g};{b}m"
-        if i < filled_len:
-            bar += f"{color}█"
+    if use_color:
+        # Colored gradient bar (original functionality)
+        # Light blue (start): RGB(173, 216, 230)
+        start_rgb = (173, 216, 230)
+        
+        # If no end color specified, generate a random vibrant color
+        if end_color is None:
+            # Generate random vibrant colors by ensuring at least one RGB component is high
+            end_rgb = random.choice(color_options)
         else:
-            bar += f"\033[0m-"
-    reset = "\033[0m"
-    percent = int((progress / total) * 100) if total else 100
-    sys.stdout.write(f"\r[{bar}{reset}] {progress}/{total} directories processed, {percent}%")
-    sys.stdout.flush()
+            end_rgb = end_color
+
+        filled_len = int(bar_len * progress // total) if total else bar_len
+        bar = ""
+        for i in range(bar_len):
+            # Interpolate color
+            ratio = i / (bar_len - 1) if bar_len > 1 else 0
+            r = int(start_rgb[0] + (end_rgb[0] - start_rgb[0]) * ratio)
+            g = int(start_rgb[1] + (end_rgb[1] - start_rgb[1]) * ratio)
+            b = int(start_rgb[2] + (end_rgb[2] - start_rgb[2]) * ratio)
+            color = f"\033[38;2;{r};{g};{b}m"
+            if i < filled_len:
+                bar += f"{color}█"
+            else:
+                bar += f"\033[0m-"
+        reset = "\033[0m"
+        percent = int((progress / total) * 100) if total else 100
+        sys.stdout.write(f"\r[{bar}{reset}] {progress}/{total} directories processed, {percent}%")
+        sys.stdout.flush()
+    else:
+        # Basic ASCII progress bar (no color)
+        filled_len = int(bar_len * progress // total) if total else bar_len
+        bar = "=" * filled_len + "-" * (bar_len - filled_len)
+        percent = int((progress / total) * 100) if total else 100
+        sys.stdout.write(f"\r[{bar}] {progress}/{total} processed, {percent}%")
+        sys.stdout.flush()
 
 def get_api_key_file():
     """
@@ -72,6 +82,28 @@ def get_api_key_file():
         key = f.read().strip().encode()  # Read and encode the key
     fernet = Fernet(key)
     with open(ENCRYPTED_KEY_PATH, "rb") as f:
+        encrypted = f.read()
+
+    return fernet.decrypt(encrypted).decode()
+
+def get_sql_password():
+    """
+    Reads an encryption key from a text file and uses it to decrypt the SQL database password.
+
+    Args:
+        None
+
+    Returns:
+        str: The decrypted SQL password as a string, used for authenticating with the MS SQL database.
+
+    Raises:
+        FileNotFoundError: If the SQL password key or encrypted password file is missing.
+        Exception: If decryption fails.
+    """
+    with open(SQL_PASSWORD_KEY_PATH, "r") as f:
+        key = f.read().strip().encode()  # Read and encode the key
+    fernet = Fernet(key)
+    with open(SQL_PASSWORD_PATH, "rb") as f:
         encrypted = f.read()
 
     return fernet.decrypt(encrypted).decode()
@@ -1398,8 +1430,7 @@ def parts_po_file(active_jobs, ASSEMBLY_ACTIVE_DIRECTORY, LOG_PO_NUMBERS, debug_
         # Create empty file
         save_json_file([], LOG_PO_NUMBERS)
 
-def refine_active_jobs(save_dir,
-                       LOG_ACTIVE_JOBS,
+def refine_active_jobs(LOG_ACTIVE_JOBS,
                        LOG_MISSING_CUST_PARTS,
                        LOG_MISSING_PURCH_PARTS,
                        LOG_PCB_STATUS,
@@ -1467,11 +1498,6 @@ def refine_active_jobs(save_dir,
     # Save refined active jobs back to LOG_ACTIVE_JOBS
     save_json_file(refined_active_jobs, LOG_ACTIVE_JOBS, create_dir=True)
     print(f"Refined active jobs: {len(refined_active_jobs)} records remain")
-
-    # Save refined active jobs as Excel file for review
-    refined_active_jobs_excel_path = os.path.join(save_dir, "refined_active_jobs.xlsx")
-    pd.DataFrame(refined_active_jobs).to_excel(refined_active_jobs_excel_path, index=False)
-    print(f"Refined active jobs Excel saved: {refined_active_jobs_excel_path}")
 
 def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs: list):
     """

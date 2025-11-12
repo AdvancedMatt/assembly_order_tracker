@@ -54,9 +54,6 @@ from local_secrets import *
 script_start = time.time()
 print(f"Script started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-save_dir = os.path.join(os.path.dirname(__file__), "SaveFiles")
-log_camData_path = os.path.join(save_dir, "log_camData.json")
-
 #-------------------------------------------------------------------#
 #            Get smartsheet and convert to dataframe
 #-------------------------------------------------------------------#
@@ -98,17 +95,17 @@ t_camData_start = time.time()
 
 try:
     # Handle missing or empty JSON file
-    if not os.path.isfile(log_camData_path) or os.path.getsize(log_camData_path) == 0:
+    if not os.path.isfile(LOG_CAM_DATA) or os.path.getsize(LOG_CAM_DATA) == 0:
         old_data = []
     else:
         try:
-            with open(log_camData_path, "r") as f:
+            with open(LOG_CAM_DATA, "r") as f:
                 old_data = json.load(f)
         except Exception:
             old_data = []
 
     # Load assembly job tracking data from camReadme.txt files
-    assembly_job_tracking_df = load_assembly_job_data(ASSEMBLY_ACTIVE_DIRECTORY, log_camData_path)
+    assembly_job_tracking_df = load_assembly_job_data(ASSEMBLY_ACTIVE_DIRECTORY, LOG_CAM_DATA)
    
     # Function returns a tuple (df, _), use only the first
     if isinstance(assembly_job_tracking_df, tuple):
@@ -117,9 +114,8 @@ try:
     # Add 'internal_status' column, blank for all rows
     assembly_job_tracking_df['internal_status'] = ""
 
-    # Ensure SaveFiles directory exists and save
-    os.makedirs(save_dir, exist_ok=True)
-    assembly_job_tracking_df.to_json(log_camData_path, orient="records", indent=2)
+    # Save updated data back to JSON file
+    assembly_job_tracking_df.to_json(LOG_CAM_DATA, orient="records", indent=2)
 
 except Exception as e:
     print(f"Error loading assembly job tracking data: {e}")
@@ -288,7 +284,6 @@ t_refine_active_jobs_start = time.time()
 
 try:
     refine_active_jobs(
-        save_dir,
         LOG_ACTIVE_JOBS,
         LOG_MISSING_CUST_PARTS,
         LOG_MISSING_PURCH_PARTS,
