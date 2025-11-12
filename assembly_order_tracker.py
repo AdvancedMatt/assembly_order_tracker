@@ -50,6 +50,11 @@ from defines import *
 from functions import *
 from local_secrets import *
 
+# Required imports for database connection
+from database_utils import execute_custom_query
+from config_manager import validate_config
+import logging
+
 # Track script start time for performance/debug
 script_start = time.time()
 print(f"Script started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

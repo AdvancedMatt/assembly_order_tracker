@@ -373,6 +373,7 @@ def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.
     """
     Extracts user-entered data from specified columns in the Smartsheet DataFrame.
     Stores data in a json log file with row ID and WO# for tracking user modifications.
+    Also creates a timestamped CSV backup of the entire DataFrame and manages old backups.
 
     Args:
         smartsheet_part_tracking_df (pd.DataFrame): DataFrame containing Smartsheet data, 
@@ -380,8 +381,48 @@ def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.
 
     Returns:
         None: Saves user data to 'SaveFiles/log_user_entered_data.json' and prints status.
+
+    None: Saves user data to 'SaveFiles/log_user_entered_data.json', creates CSV backup,
+            and prints status. Deletes backups older than 15 days.
     """
     try:
+        # Create Backups directory if it doesn't exist
+        backups_dir = 'SaveFiles/Backups'
+        os.makedirs(backups_dir, exist_ok=True)
+        
+        # Create timestamped backup of entire DataFrame
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_filename = f'smartsheet_backup_{timestamp}.csv'
+        backup_filepath = os.path.join(backups_dir, backup_filename)
+        
+        if not smartsheet_part_tracking_df.empty:
+            smartsheet_part_tracking_df.to_csv(backup_filepath, index=False)
+            print(f"✓ Smartsheet backup saved: {backup_filepath}")
+        
+        # Delete backups older than 15 days
+        current_time = datetime.now()
+        deleted_count = 0
+        
+        try:
+            for filename in os.listdir(backups_dir):
+                if filename.startswith('smartsheet_backup_') and filename.endswith('.csv'):
+                    file_path = os.path.join(backups_dir, filename)
+                    file_modified_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                    
+                    # Calculate age in days
+                    age_days = (current_time - file_modified_time).days
+                    
+                    if age_days > 15:
+                        os.remove(file_path)
+                        deleted_count += 1
+                        print(f"  Deleted old backup: {filename} (age: {age_days} days)")
+            
+            if deleted_count > 0:
+                print(f"✓ Deleted {deleted_count} backup(s) older than 15 days")
+                
+        except Exception as e:
+            print(f"⚠ Warning: Error cleaning old backups: {e}")
+        
         # Extract user-entered data from smartsheet
         if 'smartsheet_part_tracking_df' in locals() and not smartsheet_part_tracking_df.empty:
             # Filter to only include rows that have data in user-entered columns
