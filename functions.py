@@ -300,6 +300,7 @@ def load_assembly_job_data(network_dir: str, log_camData_path: str) -> pd.DataFr
 def build_active_credithold_files(cam_data: list, existing_credit_holds: set) -> tuple:
     """
     Processes CAM data to separate active jobs from credit hold jobs and identify released credit holds.
+    Cross-references with SQL database for accurate credit hold status.
     
     Args:
         cam_data (list): List of dictionaries containing CAM data records with job information
@@ -311,62 +312,276 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
             - credit_hold_jobs (list): Jobs currently on credit hold with tracking date
             - credit_hold_released (list): Jobs released from credit hold with release date
     """
-    # Initialize lists for the two output files
+    from database_utils import execute_custom_query
+    
     active_jobs = []
     credit_hold_jobs = []
     credit_hold_released = []
     
-    # Get current date for tracking purposes - should be formatted for smartsheet API
-    current_date = datetime.now().strftime('%m/%d/%y')
-
-    total_records = len(cam_data)
+    # Step 1: Extract all order numbers and create mapping
+    print("Extracting order numbers from CAM data...")
+    wo_to_order_map = {}  # Maps WO# to 5-digit order number
     
-    # Process each record in the source data
-    for idx, record in enumerate(cam_data):
-        status = record.get('Status', '')
-        credit_hold = record.get('Credit Hold', '')
-        wo_number = record.get('WO#', '')
+    for job in cam_data:
+        wo_number = job.get('WO#', '')
         
-        # Check if job is on credit hold
+        # Extract 5-digit order number from WO# (remove everything AFTER and including first underscore)
+        if '_' in wo_number:
+            order_no = wo_number.split('_', 1)[0]  # Get everything BEFORE first underscore
+        else:
+            order_no = wo_number
+        
+        # Remove any non-numeric characters and ensure it's 5 digits
+        order_no = ''.join(filter(str.isdigit, order_no))
+        
+        if len(order_no) >= 5:
+            order_no = order_no[:5]  # Take first 5 digits
+            wo_to_order_map[wo_number] = order_no
+    
+    print(f"✓ Extracted {len(wo_to_order_map)} order numbers")
+    
+    # Step 2: Batch query database for all credit holds at once
+    print("Querying SQL database for credit hold status (batch query)...")
+    db_credit_holds = set()
+    
+    if wo_to_order_map:
+        try:
+            # Get unique order numbers for the query
+            unique_order_nos = list(set(wo_to_order_map.values()))
+
+            # DEBUG: Save unique order numbers to file
+            debug_order_nos_path = 'SaveFiles/debug_order_numbers.txt'
+            with open(debug_order_nos_path, 'w') as f:
+                f.write("Unique Order Numbers for Query:\n")
+                f.write("=" * 50 + "\n\n")
+                for order_no in sorted(unique_order_nos):
+                    f.write(f"{order_no}\n")
+                f.write("\n" + "=" * 50 + "\n")
+                f.write(f"Total unique order numbers: {len(unique_order_nos)}\n")
+            print(f"  DEBUG: Saved order numbers to {debug_order_nos_path}")
+            
+            # Build parameterized query with IN clause
+            placeholders = ','.join(['?' for _ in unique_order_nos])
+            query = f"""
+            SELECT [order_no], [credit_hold]
+            FROM [advcircuits].[dbo].[R4Order]
+            WHERE [ar_entity] = 'AC' AND [order_no] IN ({placeholders})
+            """
+
+             # DEBUG: Save query with placeholders to file
+            debug_query_path = 'SaveFiles/debug_query.txt'
+            with open(debug_query_path, 'w') as f:
+                f.write("SQL Query with Placeholders:\n")
+                f.write("=" * 50 + "\n\n")
+                f.write(query)
+                f.write("\n\n" + "=" * 50 + "\n")
+                f.write(f"Number of placeholders: {len(unique_order_nos)}\n")
+                f.write(f"Parameters tuple length: {len(unique_order_nos)}\n")
+            print(f"  DEBUG: Saved query to {debug_query_path}")
+            
+            # Execute single batch query
+            results = execute_custom_query(query, tuple(unique_order_nos))
+            
+            print(f"  DEBUG: Query returned {len(results)} results")
+
+            # DEBUG: Save query results to file
+            debug_results_path = 'SaveFiles/debug_query_results.txt'
+            with open(debug_results_path, 'w') as f:
+                f.write("SQL Query Results:\n")
+                f.write("=" * 50 + "\n\n")
+                f.write(f"Total results: {len(results)}\n\n")
+                
+                if results:
+                    f.write("Sample results (first 10):\n")
+                    for i, row in enumerate(results[:10]):
+                        f.write(f"\nResult {i+1}:\n")
+                        f.write(f"  order_no: {row['order_no']} (type: {type(row['order_no'])})\n")
+                        f.write(f"  credit_hold: {row['credit_hold']} (type: {type(row['credit_hold'])})\n")
+                    
+                    f.write("\n" + "=" * 50 + "\n")
+                    f.write("All results:\n\n")
+                    for row in results:
+                        f.write(f"order_no: {row['order_no']}, credit_hold: {row['credit_hold']}\n")
+                    
+                    # Count credit holds
+                    credit_hold_count = sum(1 for row in results if row['credit_hold'] == 1)
+                    f.write("\n" + "=" * 50 + "\n")
+                    f.write(f"Credit hold count: {credit_hold_count}\n")
+                else:
+                    f.write("No results returned from query\n")
+            
+            # Create lookup dictionary of order_no to credit_hold status
+            # Handle both string and integer order numbers from database
+            order_credit_hold = {}
+            for row in results:
+                # Convert order_no to string and strip any whitespace/padding
+                order_key = str(row['order_no']).strip()
+                order_credit_hold[order_key] = row['credit_hold']
+            
+            print(f"  DEBUG: Sample DB results: {list(order_credit_hold.items())[:5]}")
+            print(f"  DEBUG: Sample WO mappings: {list(wo_to_order_map.items())[:5]}")
+            
+            # Map back to WO# numbers
+            for wo_number, order_no in wo_to_order_map.items():
+                # Ensure we're comparing strings
+                order_no_str = str(order_no).strip()
+                
+                if order_no_str in order_credit_hold:
+                    if order_credit_hold[order_no_str] == 1:
+                        db_credit_holds.add(wo_number)
+                        print(f"  DEBUG: Found credit hold in DB for {wo_number} (order {order_no_str})")
+            
+            # DEBUG: Save WO to order mapping
+            debug_mapping_path = 'SaveFiles/debug_wo_to_order_mapping.txt'
+            with open(debug_mapping_path, 'w') as f:
+                f.write("WO# to Order Number Mapping:\n")
+                f.write("=" * 50 + "\n\n")
+                for wo, order in sorted(wo_to_order_map.items()):
+                    credit_status = order_credit_hold.get(order, 'NOT FOUND')
+                    f.write(f"WO#: {wo} -> Order: {order} -> Credit Hold: {credit_status}\n")
+                f.write("\n" + "=" * 50 + "\n")
+                f.write(f"Total mappings: {len(wo_to_order_map)}\n")
+            print(f"  DEBUG: Saved WO mappings to {debug_mapping_path}")
+            
+            # DEBUG: Save credit holds found
+            debug_credit_holds_path = 'SaveFiles/debug_credit_holds_found.txt'
+            with open(debug_credit_holds_path, 'w') as f:
+                f.write("Credit Holds Found in Database:\n")
+                f.write("=" * 50 + "\n\n")
+                for wo in sorted(db_credit_holds):
+                    order = wo_to_order_map.get(wo, 'UNKNOWN')
+                    f.write(f"WO#: {wo} (Order: {order})\n")
+                f.write("\n" + "=" * 50 + "\n")
+                f.write(f"Total credit holds found: {len(db_credit_holds)}\n")
+            print(f"  DEBUG: Saved credit holds to {debug_credit_holds_path}")
+            
+            print(f"✓ Database query complete: {len(db_credit_holds)} credit holds found")
+            
+        except Exception as e:
+            print(f"⚠ Error querying database: {e}")
+            import traceback
+            traceback.print_exc()
+            print("  Continuing with CAM data only...")
+    
+    # Step 3: Extract credit holds from CAM data
+    print("Processing CAM data for credit hold status...")
+    cam_credit_holds = set()
+    
+    for job in cam_data:
+        wo_number = job.get('WO#', '')
+        credit_hold = job.get('Credit Hold', '')
+        
+        # Handle None values safely
+        if credit_hold is None:
+            credit_hold = ''
+        else:
+            credit_hold = str(credit_hold).strip().upper()
+        
         if credit_hold == 'YES':
-            # Add to credit hold list with only specified columns
-            credit_hold_record = {
-                'Status': record.get('Status', ''),
-                'Quote#': record.get('Quote#', ''),
-                'WO#': record.get('WO#', ''),
-                'Customer': record.get('Customer', ''),
-                'Credit Hold': record.get('Credit Hold', ''),
-                '__file_path__': record.get('__file_path__', ''),
-                '__file_mtime__': record.get('__file_mtime__', ''),
-                'internal_status': record.get('internal_status', ''),
-                'tracking_date': current_date
-            }
-            credit_hold_jobs.append(credit_hold_record)
-
-        # Check if job was released from credit hold
-        elif credit_hold == 'NO' and wo_number in existing_credit_holds:
-            # This WO# was previously on credit hold but now released
-            credit_hold_released.append({
-                'WO#': wo_number,
-                'released_date': current_date
-            })
-            # Also add to active jobs if it meets active criteria
-            if status not in excluded_statuses:
-                active_jobs.append(record)
-
-        # Check if job is active (not in excluded statuses and not on credit hold)
-        elif status not in excluded_statuses and credit_hold != 'YES':
-            active_jobs.append(record)
-
-        # Print color gradient progress bar
-        blue_gradient_bar(idx + 1, total_records, color_options[0])
-    # Newline after progress bar
-    print(f"Active jobs - {len(active_jobs)} records")
-    print(f"Credit hold jobs - {len(credit_hold_jobs)} records")
-    print(f"Credit hold released - {len(credit_hold_released)} records")
-    print()
-    print() 
-
+            cam_credit_holds.add(wo_number)
+    
+    print(f"✓ CAM data processing complete: {len(cam_credit_holds)} credit holds found")
+    
+    # Step 4: Compare and identify discrepancies
+    db_only = db_credit_holds - cam_credit_holds  # In database but not in CAM
+    cam_only = cam_credit_holds - db_credit_holds  # In CAM but not in database
+    matching = db_credit_holds & cam_credit_holds  # In both
+    
+    discrepancies = []
+    
+    # Add database-only discrepancies
+    for wo in db_only:
+        discrepancies.append({
+            'WO#': wo,
+            'Source': 'Database Only',
+            'DB_Credit_Hold': 'Yes',
+            'CAM_Credit_Hold': 'No'
+        })
+    
+    # Add CAM-only discrepancies
+    for wo in cam_only:
+        discrepancies.append({
+            'WO#': wo,
+            'Source': 'CAM Only',
+            'DB_Credit_Hold': 'No',
+            'CAM_Credit_Hold': 'Yes'
+        })
+    
+    # Save discrepancies to CSV
+    os.makedirs('SaveFiles', exist_ok=True)
+    
+    if discrepancies:
+        discrepancy_df = pd.DataFrame(discrepancies)
+        discrepancy_path = 'SaveFiles/credit_hold_discrepancies.csv'
+        discrepancy_df.to_csv(discrepancy_path, index=False)
+        print(f"⚠ Credit hold discrepancies found: {len(discrepancies)} records")
+        print(f"  Discrepancy report saved: {discrepancy_path}")
+        print(f"  - Database only: {len(db_only)}")
+        print(f"  - CAM only: {len(cam_only)}")
+    else:
+        # Save empty discrepancy file with timestamp to show it was checked
+        discrepancy_df = pd.DataFrame(columns=['WO#', 'Source', 'DB_Credit_Hold', 'CAM_Credit_Hold'])
+        discrepancy_path = 'SaveFiles/credit_hold_discrepancies.csv'
+        discrepancy_df.to_csv(discrepancy_path, index=False)
+        
+        # Also save a status file showing when the check was performed
+        status_path = 'SaveFiles/credit_hold_check_status.txt'
+        with open(status_path, 'w') as f:
+            f.write("Credit Hold Discrepancy Check\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Last checked: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Database credit holds: {len(db_credit_holds)}\n")
+            f.write(f"CAM credit holds: {len(cam_credit_holds)}\n")
+            f.write(f"Matching credit holds: {len(matching)}\n")
+            f.write(f"Discrepancies found: 0\n")
+        
+        print(f"✓ No discrepancies found between database and CAM data")
+        print(f"  - Matching credit holds: {len(matching)}")
+        print(f"  Empty discrepancy file saved: {discrepancy_path}")
+        print(f"  Status file saved: {status_path}")
+        
+    # Step 5: Combine all credit holds (union of both sources)
+    all_credit_holds = db_credit_holds | cam_credit_holds
+    
+    print(f"Processing {len(all_credit_holds)} total credit hold jobs...")
+    
+    # Step 6: Process jobs using combined credit hold list
+    for job in cam_data:
+        wo_number = job.get('WO#', '')
+        status = job.get('Status', '')
+        
+        # Handle None values safely
+        if status is None:
+            status = ''
+        else:
+            status = str(status).strip().upper()
+        
+        # Skip excluded statuses
+        if status in excluded_statuses:
+            continue
+        
+        # Check if job is on credit hold (from either source)
+        if wo_number in all_credit_holds:
+            # Add timestamp to track when credit hold was detected
+            job_with_timestamp = job.copy()
+            job_with_timestamp['Credit_Hold_Date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            credit_hold_jobs.append(job_with_timestamp)
+            
+        else:
+            # Job is active (not on credit hold and not excluded)
+            active_jobs.append(job)
+            
+            # Check if this job was previously on credit hold
+            if wo_number in existing_credit_holds:
+                release_record = job.copy()
+                release_record['Credit_Hold_Released_Date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                credit_hold_released.append(release_record)
+    
+    print(f"✓ Job processing complete:")
+    print(f"  - Active jobs: {len(active_jobs)}")
+    print(f"  - Credit hold jobs: {len(credit_hold_jobs)}")
+    print(f"  - Released from credit hold: {len(credit_hold_released)}")
+    
     return active_jobs, credit_hold_jobs, credit_hold_released
 
 def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.DataFrame:
