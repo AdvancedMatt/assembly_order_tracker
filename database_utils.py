@@ -31,12 +31,22 @@ class DatabaseConnection:
         """
         try:
             connection_string = db_config.get_connection_string()
+            logger.debug(f"Attempting database connection...")
             self.connection = pyodbc.connect(connection_string)
             self.cursor = self.connection.cursor()
             logger.info("Database connection established successfully")
             return True
+        except pyodbc.InterfaceError as e:
+            logger.error(f"Database interface error: {e}")
+            logger.error("This usually means ODBC driver is missing or misconfigured")
+            return False
+        except pyodbc.OperationalError as e:
+            logger.error(f"Database operational error: {e}")
+            logger.error("This could mean: wrong server name, network issues, or authentication failure")
+            return False
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
             return False
     
     def disconnect(self):
@@ -62,24 +72,41 @@ class DatabaseConnection:
             Exception: If query execution fails
         """
         try:
+            logger.debug(f"Executing query (first 100 chars): {query[:100]}...")
             if params:
+                logger.debug(f"Query parameters: {params}")
                 self.cursor.execute(query, params)
             else:
                 self.cursor.execute(query)
             
             # Get column names from cursor description
-            columns = [column[0] for column in self.cursor.description]
+            if self.cursor.description:
+                columns = [column[0] for column in self.cursor.description]
+                
+                # Fetch all rows and convert to list of dictionaries
+                results = []
+                for row in self.cursor.fetchall():
+                    results.append(dict(zip(columns, row)))
+                
+                logger.info(f"Query executed successfully, returned {len(results)} rows")
+                return results
+            else:
+                logger.warning("Query executed but returned no result set (possibly a non-SELECT query)")
+                return []
             
-            # Fetch all rows and convert to list of dictionaries
-            results = []
-            for row in self.cursor.fetchall():
-                results.append(dict(zip(columns, row)))
-            
-            logger.info(f"Query executed successfully, returned {len(results)} rows")
-            return results
-            
+        except pyodbc.ProgrammingError as e:
+            logger.error(f"SQL programming error: {e}")
+            logger.error(f"Query: {query}")
+            if params:
+                logger.error(f"Parameters: {params}")
+            raise
+        except pyodbc.DataError as e:
+            logger.error(f"SQL data error: {e}")
+            logger.error(f"Query: {query}")
+            raise
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Query: {query}")
             raise
     

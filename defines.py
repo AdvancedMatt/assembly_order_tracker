@@ -1,4 +1,9 @@
+# Debug and logging configuration
 debug_output = False
+DEBUG = False  # Set to True to enable detailed debug logging
+LOG_LEVEL = "WARNING"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+ERROR_LOG_PATH = "SaveFiles/error_log.txt"
+DEBUG_LOG_PATH = "SaveFiles/debug_log.txt"
 
 # Smartsheet columns to store - used to restor smartsheet during update
 user_entered_columns = [
@@ -29,7 +34,7 @@ DELETE_BATCH_SIZE = 100
 ADD_BATCH_SIZE = 100
 
 # Progress bar settings
-USE_COLOR_PROGRESS_BAR = False  # Set to False for basic ASCII progress bar without colors
+USE_COLOR_PROGRESS_BAR = True  # Set to False for basic ASCII progress bar without colors
 
 bar_len = 100 # Progress bar length
 
@@ -50,3 +55,19 @@ color_options = [
             (184, 134, 11), # Dark Goldenrod
             (128, 128, 0),  # Olive
         ]
+
+# Data validation configuration
+# Fields that should be numeric (int or float)
+NUMERIC_FIELDS = [
+    'Line Items', 'SMT', 'FP', 'TH', 'BGA', 'Qty', 'Qty Shipped',
+    'Turn', 'Quote #', 'Mfg Qty'
+]
+
+# Fields that should be dates
+DATE_FIELDS = [
+    'Sales Order Date', 'Due Date', 'Date Released', 'Ship Date'
+]
+
+# Default values for invalid data
+DEFAULT_NUMERIC_VALUE = 0
+DEFAULT_DATE_VALUE = '1980-01-01'

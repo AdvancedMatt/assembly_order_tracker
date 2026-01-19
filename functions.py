@@ -9,9 +9,229 @@ from dateutil import parser
 import random
 import numpy as np
 import smartsheet
+import logging
+import traceback
 
 from defines import *
 from local_secrets import PASSWORD_FILE_PATH, ENCRYPTED_KEY_PATH, SQL_PASSWORD_PATH, SQL_PASSWORD_KEY_PATH
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
+
+def sanitize_cam_data(df: pd.DataFrame) -> tuple:
+    """
+    Sanitizes camReadme data by validating and correcting field types.
+    Handles cases where users enter strings in numeric/date fields.
+    
+    Args:
+        df (pd.DataFrame): Raw DataFrame from camReadme.txt files
+        
+    Returns:
+        tuple: (sanitized_df, corrections_list) where corrections_list contains
+               details of all corrections made
+    """
+    if df.empty:
+        logger.warning("Cannot sanitize empty DataFrame")
+        return df, []
+    
+    corrections = []
+    logger.info(f"Starting data sanitization for {len(df)} records...")
+    
+    # Sanitize missing WO# fields with unique placeholder values
+    missing_wo_counter = 1
+    if 'WO#' in df.columns:
+        for idx in df.index:
+            wo_value = df.at[idx, 'WO#']
+            if wo_value is None or (isinstance(wo_value, str) and wo_value.strip() == '') or pd.isna(wo_value):
+                # Generate unique placeholder WO#
+                placeholder_wo = f"99999_{missing_wo_counter:02d}"
+                customer = df.at[idx, 'Customer'] if 'Customer' in df.columns else 'Unknown'
+                
+                correction = {
+                    'Record': idx,
+                    'WO#': placeholder_wo,
+                    'Customer': customer,
+                    'Field': 'WO#',
+                    'Original_Value': 'MISSING',
+                    'Corrected_Value': placeholder_wo,
+                    'Type': 'Missing Field'
+                }
+                corrections.append(correction)
+                
+                df.at[idx, 'WO#'] = placeholder_wo
+                missing_wo_counter += 1
+                
+                logger.warning(
+                    f"Corrected missing WO#: Record {idx} | Customer {customer} | "
+                    f"Set to '{placeholder_wo}'"
+                )
+        
+        if missing_wo_counter > 1:
+            total_missing = missing_wo_counter - 1
+            logger.warning(f"Replaced {total_missing} missing WO# field(s) with placeholder values (99999_01, etc.)")
+            print(f"⚠ WARNING: {total_missing} records had missing WO# - replaced with placeholder values (99999_01, 99999_02, etc.)")
+    
+    # Sanitize numeric fields
+    for field in NUMERIC_FIELDS:
+        if field not in df.columns:
+            continue
+            
+        for idx in df.index:
+            original_value = df.at[idx, field]
+            
+            # Skip if already None/NaN or empty
+            if pd.isna(original_value) or original_value == '':
+                continue
+            
+            # Try to convert to numeric
+            try:
+                # If it's already numeric, skip
+                if isinstance(original_value, (int, float)):
+                    continue
+                    
+                # Try to convert string to numeric
+                numeric_value = pd.to_numeric(original_value, errors='raise')
+                df.at[idx, field] = numeric_value
+                
+            except (ValueError, TypeError):
+                # Invalid numeric value - set to default
+                wo_number = df.at[idx, 'WO#'] if 'WO#' in df.columns else 'Unknown'
+                customer = df.at[idx, 'Customer'] if 'Customer' in df.columns else 'Unknown'
+                
+                correction = {
+                    'Record': idx,
+                    'WO#': wo_number,
+                    'Customer': customer,
+                    'Field': field,
+                    'Original_Value': str(original_value),
+                    'Corrected_Value': DEFAULT_NUMERIC_VALUE,
+                    'Type': 'Numeric'
+                }
+                corrections.append(correction)
+                
+                df.at[idx, field] = DEFAULT_NUMERIC_VALUE
+                
+                logger.warning(
+                    f"Corrected numeric field: Record {idx} | WO# {wo_number} | "
+                    f"Field '{field}': '{original_value}' → {DEFAULT_NUMERIC_VALUE}"
+                )
+    
+    # Sanitize date fields
+    for field in DATE_FIELDS:
+        if field not in df.columns:
+            continue
+            
+        for idx in df.index:
+            original_value = df.at[idx, field]
+            
+            # Skip if already None/NaN or empty
+            if pd.isna(original_value) or original_value == '':
+                continue
+            
+            # Try to parse as date
+            try:
+                # Try pandas to_datetime
+                parsed_date = pd.to_datetime(original_value, errors='raise')
+                # If successful, keep the original value
+                continue
+                
+            except (ValueError, TypeError, parser.ParserError):
+                # Invalid date value - set to default
+                wo_number = df.at[idx, 'WO#'] if 'WO#' in df.columns else 'Unknown'
+                customer = df.at[idx, 'Customer'] if 'Customer' in df.columns else 'Unknown'
+                
+                correction = {
+                    'Record': idx,
+                    'WO#': wo_number,
+                    'Customer': customer,
+                    'Field': field,
+                    'Original_Value': str(original_value),
+                    'Corrected_Value': DEFAULT_DATE_VALUE,
+                    'Type': 'Date'
+                }
+                corrections.append(correction)
+                
+                df.at[idx, field] = DEFAULT_DATE_VALUE
+                
+                logger.warning(
+                    f"Corrected date field: Record {idx} | WO# {wo_number} | "
+                    f"Field '{field}': '{original_value}' → {DEFAULT_DATE_VALUE}"
+                )
+    
+    if corrections:
+        logger.warning(f"\n{'='*70}")
+        logger.warning(f"DATA SANITIZATION SUMMARY: {len(corrections)} corrections made")
+        logger.warning(f"{'='*70}")
+        
+        # Group corrections by WO#
+        wo_corrections = {}
+        for corr in corrections:
+            wo = corr['WO#']
+            if wo not in wo_corrections:
+                wo_corrections[wo] = []
+            wo_corrections[wo].append(corr)
+        
+        # Log summary by WO#
+        for wo, corr_list in wo_corrections.items():
+            customer = corr_list[0]['Customer']
+            logger.warning(f"\n  WO# {wo} | Customer: {customer}")
+            for corr in corr_list:
+                logger.warning(
+                    f"    Field: {corr['Field']:15} '{corr['Original_Value']}' → {corr['Corrected_Value']}"
+                )
+        
+        logger.warning(f"{'='*70}\n")
+        
+        # Also print to console
+        print(f"\n⚠ WARNING: Found {len(corrections)} invalid data entries that were corrected:")
+        for wo, corr_list in wo_corrections.items():
+            customer = corr_list[0]['Customer']
+            print(f"  WO# {wo} | {customer} - {len(corr_list)} field(s) corrected")
+        print(f"  See {ERROR_LOG_PATH} for details\n")
+    else:
+        logger.info("Data sanitization complete - no corrections needed")
+    
+    return df, corrections
+
+def safe_float(value, default=0.0):
+    """
+    Safely convert a value to float, returning default if conversion fails.
+    
+    Args:
+        value: Value to convert (can be string, numeric, or None)
+        default: Default value to return if conversion fails (default: 0.0)
+        
+    Returns:
+        float: Converted value or default
+    """
+    if value is None or value == '' or pd.isna(value):
+        return default
+    
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        logger.debug(f"Could not convert '{value}' to float, using default {default}")
+        return default
+
+def safe_int(value, default=0):
+    """
+    Safely convert a value to int, returning default if conversion fails.
+    
+    Args:
+        value: Value to convert (can be string, numeric, or None)
+        default: Default value to return if conversion fails (default: 0)
+        
+    Returns:
+        int: Converted value or default
+    """
+    if value is None or value == '' or pd.isna(value):
+        return default
+    
+    try:
+        return int(float(value))  # Convert through float first to handle "5.0" strings
+    except (ValueError, TypeError):
+        logger.debug(f"Could not convert '{value}' to int, using default {default}")
+        return default
 
 def blue_gradient_bar(progress, total, end_color=None, use_color=False):
     """
@@ -78,13 +298,32 @@ def get_api_key_file():
         FileNotFoundError: If the password or encrypted key file is missing.
         Exception: If decryption fails.
     """
-    with open(PASSWORD_FILE_PATH, "r") as f:
-        key = f.read().strip().encode()  # Read and encode the key
-    fernet = Fernet(key)
-    with open(ENCRYPTED_KEY_PATH, "rb") as f:
-        encrypted = f.read()
-
-    return fernet.decrypt(encrypted).decode()
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        logger.debug(f"Reading password file: {PASSWORD_FILE_PATH}")
+        with open(PASSWORD_FILE_PATH, "r") as f:
+            key = f.read().strip().encode()  # Read and encode the key
+        logger.debug("Password file read successfully")
+        
+        fernet = Fernet(key)
+        
+        logger.debug(f"Reading encrypted key file: {ENCRYPTED_KEY_PATH}")
+        with open(ENCRYPTED_KEY_PATH, "rb") as f:
+            encrypted = f.read()
+        logger.debug("Encrypted key file read successfully")
+        
+        decrypted = fernet.decrypt(encrypted).decode()
+        logger.debug("API key decrypted successfully")
+        return decrypted
+        
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error decrypting API key: {e}")
+        raise
 
 def get_sql_password():
     """
@@ -120,27 +359,41 @@ def convert_sheet_to_dataframe(sheet):
         column titles. Empty cells are returned as None. Column order matches the Smartsheet sheet.
         Includes '_row_id' column with Smartsheet row IDs for tracking purposes.
     """
-    data = []
-    columns = [col.title for col in sheet.columns]
-    total_rows = len(sheet.rows)
-    
-    for idx, row in enumerate(sheet.rows):
-        row_data = {'_row_id': row.id}  # Add Smartsheet row ID
-        for cell in row.cells:
-            if cell.column_id in [col.id for col in sheet.columns]:
-                col_index = [col.id for col in sheet.columns].index(cell.column_id)
-                row_data[columns[col_index]] = cell.value
+    try:
+        logger.debug(f"Converting Smartsheet with {len(sheet.rows)} rows and {len(sheet.columns)} columns")
+        
+        data = []
+        columns = [col.title for col in sheet.columns]
+        total_rows = len(sheet.rows)
+        
+        logger.debug(f"Column names: {columns}")
+        
+        for idx, row in enumerate(sheet.rows):
+            row_data = {'_row_id': row.id}  # Add Smartsheet row ID
+            for cell in row.cells:
+                if cell.column_id in [col.id for col in sheet.columns]:
+                    col_index = [col.id for col in sheet.columns].index(cell.column_id)
+                    row_data[columns[col_index]] = cell.value
 
-        data.append(row_data)
+            data.append(row_data)
 
-        # Show progress bar
-        blue_gradient_bar(idx + 1, total_rows, color_options[2])  # Using Dark Blue as end color
-    # Newline after progress bar
-    print()
-    print() 
+            # Show progress bar
+            blue_gradient_bar(idx + 1, total_rows, color_options[2])  # Using Dark Blue as end color
+        # Newline after progress bar
+        print()
+        print() 
 
-    # Add '_row_id' to columns for DataFrame
-    return pd.DataFrame(data, columns=['_row_id'] + columns)
+        logger.debug(f"Extracted {len(data)} rows of data")
+        
+        # Add '_row_id' to columns for DataFrame
+        df = pd.DataFrame(data, columns=['_row_id'] + columns)
+        logger.debug(f"DataFrame created with shape: {df.shape}")
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error converting Smartsheet to DataFrame: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise
 
 def load_json_file(file_path: str, default_value=None):
     """
@@ -183,6 +436,7 @@ def load_json_file(file_path: str, default_value=None):
         return default_value if default_value is not None else []
     except Exception as e:
         print(f"⚠ Unexpected error loading {file_path}: {e}")
+        return default_value if default_value is not None else []
         return default_value if default_value is not None else []
 
 def save_json_file(data, file_path: str, create_dir=True):
@@ -239,63 +493,108 @@ def load_assembly_job_data(network_dir: str, log_camData_path: str) -> pd.DataFr
         - Only the top-level subdirectories of network_dir are searched (not recursive).
         - Progress is printed to the terminal using a bar of length bar_len from defines.py.
     """
-    data = []
+    try:
+        logger.info(f"Loading assembly job data from: {network_dir}")
+        data = []
 
-    # Step 1: Load previous data if available
-    if os.path.isfile(log_camData_path) and os.path.getsize(log_camData_path) > 0:
-        try:
-            with open(log_camData_path, "r") as f:
-                old_data = json.load(f)
-            old_lookup = {entry["__file_path__"]: entry for entry in old_data}
-        except Exception:
+        # Step 1: Load previous data if available
+        if os.path.isfile(log_camData_path) and os.path.getsize(log_camData_path) > 0:
+            try:
+                with open(log_camData_path, "r") as f:
+                    old_data = json.load(f)
+                old_lookup = {entry["__file_path__"]: entry for entry in old_data}
+                logger.debug(f"Loaded {len(old_lookup)} existing records from cache")
+            except json.JSONDecodeError as je:
+                logger.warning(f"JSON decode error in {log_camData_path}: {je}. Starting fresh.")
+                old_lookup = {}
+            except Exception as e:
+                logger.warning(f"Error loading previous data: {e}. Starting fresh.")
+                old_lookup = {}
+        else:
+            logger.debug("No existing cache found, will scan all files")
             old_lookup = {}
-    else:
-        old_lookup = {}
 
-    dir_names = [entry_name for entry_name in os.listdir(network_dir) if os.path.isdir(os.path.join(network_dir, entry_name))]
-    total_dirs = len(dir_names)
+        # Verify network directory exists and is accessible
+        if not os.path.exists(network_dir):
+            logger.error(f"Network directory does not exist: {network_dir}")
+            raise FileNotFoundError(f"Network directory not found: {network_dir}")
+        
+        try:
+            dir_names = [entry_name for entry_name in os.listdir(network_dir) if os.path.isdir(os.path.join(network_dir, entry_name))]
+        except PermissionError as pe:
+            logger.error(f"Permission denied accessing network directory: {pe}")
+            raise
+        except Exception as e:
+            logger.error(f"Error listing network directory: {e}")
+            raise
+        
+        total_dirs = len(dir_names)
+        logger.info(f"Found {total_dirs} directories to scan")
+        
+        files_read = 0
+        files_cached = 0
+        files_errors = 0
 
-    for idx, entry_name in enumerate(dir_names):
-        entry_path = os.path.join(network_dir, entry_name)
-        camreadme_path = os.path.normpath(os.path.join(entry_path, "camReadme.txt"))
+        for idx, entry_name in enumerate(dir_names):
+            entry_path = os.path.join(network_dir, entry_name)
+            camreadme_path = os.path.normpath(os.path.join(entry_path, "camReadme.txt"))
 
-        if os.path.isfile(camreadme_path):
-            mtime = os.path.getmtime(camreadme_path)
-            # Step 3: Check if file is unchanged
-            if camreadme_path in old_lookup and old_lookup[camreadme_path].get("__file_mtime__") == mtime:
-                entry = old_lookup[camreadme_path]
-                data.append(entry)
-            else:
-                # Step 4: Parse new/changed file
+            if os.path.isfile(camreadme_path):
                 try:
-                    with open(camreadme_path, "r", encoding="utf-8", errors="ignore") as f:
-                        entry = {}
-                        lines = f.readlines()
-                        for line in lines:
-                            if '|' in line:
-                                key, value = line.strip().split('|', 1)
-                                entry[key.strip()] = value.strip()
-                        entry['__file_path__'] = camreadme_path
-                        entry['__file_mtime__'] = mtime
+                    mtime = os.path.getmtime(camreadme_path)
+                    # Step 3: Check if file is unchanged
+                    if camreadme_path in old_lookup and old_lookup[camreadme_path].get("__file_mtime__") == mtime:
+                        entry = old_lookup[camreadme_path]
+                        data.append(entry)
+                        files_cached += 1
+                    else:
+                        # Step 4: Parse new/changed file
+                        try:
+                            with open(camreadme_path, "r", encoding="utf-8", errors="ignore") as f:
+                                entry = {}
+                                lines = f.readlines()
+                                for line in lines:
+                                    if '|' in line:
+                                        key, value = line.strip().split('|', 1)
+                                        entry[key.strip()] = value.strip()
+                                entry['__file_path__'] = camreadme_path
+                                entry['__file_mtime__'] = mtime
 
-                    for k, v in entry.items():
-                        if isinstance(v, str):
-                            entry[k] = v.rstrip('|')
+                            for k, v in entry.items():
+                                if isinstance(v, str):
+                                    entry[k] = v.rstrip('|')
 
-                    data.append(entry)
+                            data.append(entry)
+                            files_read += 1
 
-                except Exception as e:
-                    print(f"Error reading {camreadme_path}: {e}")
+                        except Exception as e:
+                            logger.error(f"Error reading {camreadme_path}: {e}")
+                            files_errors += 1
+                            if DEBUG:
+                                logger.debug(f"Traceback: {traceback.format_exc()}")
+                            continue
+                except OSError as ose:
+                    logger.error(f"OS error accessing {camreadme_path}: {ose}")
+                    files_errors += 1
                     continue
 
-        # Print color gradient progress bar
-        blue_gradient_bar(idx + 1, total_dirs, color_options[1])
-    # Newline after progress bar
-    print()
-    print() 
+            # Print color gradient progress bar
+            blue_gradient_bar(idx + 1, total_dirs, color_options[1])
+        # Newline after progress bar
+        print()
+        print() 
 
-    # Return all camData file information
-    return pd.DataFrame(data)
+        logger.info(f"Scan complete: {files_read} files read, {files_cached} from cache, {files_errors} errors")
+        
+        # Return all camData file information
+        df = pd.DataFrame(data)
+        logger.info(f"Created DataFrame with {len(df)} records")
+        return df
+        
+    except Exception as e:
+        logger.error(f"Fatal error in load_assembly_job_data: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise
 
 def build_active_credithold_files(cam_data: list, existing_credit_holds: set) -> tuple:
     """
@@ -323,7 +622,7 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
     wo_to_order_map = {}  # Maps WO# to 5-digit order number
     
     for job in cam_data:
-        wo_number = job.get('WO#', '')
+        wo_number = str(job.get('WO#', ''))
         
         # Extract 5-digit order number from WO# (remove everything AFTER and including first underscore)
         if '_' in wo_number:
@@ -468,7 +767,7 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
     cam_credit_holds = set()
     
     for job in cam_data:
-        wo_number = job.get('WO#', '')
+        wo_number = str(job.get('WO#', ''))
         credit_hold = job.get('Credit Hold', '')
         
         # Handle None values safely
@@ -547,10 +846,10 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
     
     # Step 6: Process jobs using combined credit hold list
     for job in cam_data:
-        wo_number = job.get('WO#', '')
+        wo_number = str(job.get('WO#', ''))
         status = job.get('Status', '')
         
-        # Handle None values safely
+        # Handle None values safely for status
         if status is None:
             status = ''
         else:
@@ -1978,90 +2277,132 @@ def update_smartsheet(smartsheet_update_df,
         None: Deletes all existing rows and adds new rows with formatting applied.
               Applies color coding for status indicators and due dates.
     """
-    # Get all row IDs from the current Smartsheet
-    if '_row_id' in smartsheet_part_tracking_df.columns:
-        all_row_ids = smartsheet_part_tracking_df['_row_id'].tolist()
-    else:
-        all_row_ids = []
-
-    # Delete all rows in batches
-    print(f"Deleting {len(all_row_ids)} rows from Smartsheet in batches of {DELETE_BATCH_SIZE}...")
-    for i in range(0, len(all_row_ids), DELETE_BATCH_SIZE):
-        batch_ids = all_row_ids[i:i+DELETE_BATCH_SIZE]
-        if batch_ids:
-            smartsheet_client.Sheets.delete_rows(assembly_part_tracking_id, batch_ids)
-            print(f"Deleted rows {i+1} to {i+len(batch_ids)}")
-
-    # Replace NaN values with empty strings before uploading to Smartsheet
-    smartsheet_update_df = smartsheet_update_df.replace({np.nan: ""})
-
-    # Sort the DataFrame: empty 'Pur Part' first, then by 'Sales Order Date' descending
-    # smartsheet_update_df['pur_part_sort'] = smartsheet_update_df['Pur Part'].apply(lambda x: 0 if x == '' else 1)
-    # smartsheet_update_df = smartsheet_update_df.sort_values(['pur_part_sort', 'Sales Order Date'], ascending=[True, False])
-    # smartsheet_update_df = smartsheet_update_df.drop('pur_part_sort', axis=1)
-
-    # Prepare new rows for Smartsheet
-    new_rows = []
-    format_part_columns = ['Pur Part', 'Cus Part', 'PCB', 'Stencil']
-    format_turn_column = 'Turn'
-    format_due_column = 'Due Date'
-
-    for idx, row in smartsheet_update_df.iterrows():
-        cells = []
-        for col in smartsheet_update_df.columns:
-            col_id = smartsheet_sheet.columns[smartsheet_update_df.columns.get_loc(col)].id
-            cell = smartsheet.models.Cell()
-            cell.column_id = col_id
-            cell.value = row[col]
-
-            # Apply formatting for part status columns (Pur Part, Cus Part, PCB, Stencil)
-            if col in format_part_columns:
-                if row[col]:  # If there is text in the cell
-                    cell.format = ",,,,,,,,2,19,,0,,,,0,"   # White text, red background for active status
-                else:  # If cell is empty
-                    cell.format = ",,,,,,,,14,14,,0,,,,0,"  # Green text and background
+    try:
+        logger.info(f"Starting Smartsheet update for sheet ID: {assembly_part_tracking_id}")
+        logger.info(f"Rows to upload: {len(smartsheet_update_df)}")
         
-            # Apply formatting for Turn column
-            if col == format_turn_column:
-                turn_value = str(row[col]).strip().upper()
-                turn_num = float(turn_value)
-                if turn_num >= 7:
-                    cell.format = ",,,,,,,,,9,,0,,,,0,"
-                else:
-                    cell.format = ",,,,,,,,,0,,0,,,,0,"
+        # Get all row IDs from the current Smartsheet
+        if '_row_id' in smartsheet_part_tracking_df.columns:
+            all_row_ids = smartsheet_part_tracking_df['_row_id'].tolist()
+            logger.debug(f"Found {len(all_row_ids)} existing row IDs")
+        else:
+            all_row_ids = []
+            logger.warning("No _row_id column found in existing data")
 
-            # Apply formatting for Due Date column
-            if col == format_due_column:
+        # Delete all rows in batches
+        logger.info(f"Deleting {len(all_row_ids)} rows from Smartsheet in batches of {DELETE_BATCH_SIZE}...")
+        print(f"Deleting {len(all_row_ids)} rows from Smartsheet in batches of {DELETE_BATCH_SIZE}...")
+        for i in range(0, len(all_row_ids), DELETE_BATCH_SIZE):
+            batch_ids = all_row_ids[i:i+DELETE_BATCH_SIZE]
+            if batch_ids:
                 try:
-                    due_date = pd.to_datetime(row[col], errors='coerce')
+                    smartsheet_client.Sheets.delete_rows(assembly_part_tracking_id, batch_ids)
+                    logger.debug(f"Deleted batch: rows {i+1} to {i+len(batch_ids)}")
+                    print(f"Deleted rows {i+1} to {i+len(batch_ids)}")
+                except Exception as e:
+                    logger.error(f"Error deleting batch {i//DELETE_BATCH_SIZE + 1}: {e}")
+                    raise
 
-                    if pd.notnull(due_date):
-                        today = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
-                        delta_days = (due_date - today).days
+        # Replace NaN values with empty strings before uploading to Smartsheet
+        smartsheet_update_df = smartsheet_update_df.replace({np.nan: ""})
+        logger.debug("Replaced NaN values with empty strings")
 
-                        cell.format = ",,,,,,,,40,2,,0,,,,0,"   # Purple text, white background
-                        
-                        if delta_days < 0:
-                            cell.format = ",,,,,,,,2,19,,0,,,,0,"   # White text, red background
-                        elif delta_days <= 3:
-                            cell.format = ",,,,,,,,2,28,,0,,,,0,"   # White text, orange background
+        # Prepare new rows for Smartsheet
+        new_rows = []
+        format_part_columns = ['Pur Part', 'Cus Part', 'PCB', 'Stencil']
+        format_turn_column = 'Turn'
+        format_due_column = 'Due Date'
+        
+        logger.info("Building rows with formatting...")
+        formatting_errors = 0
 
-                except Exception as ex:
-                    print(f"DEBUG: Exception in due date formatting: {ex}")
+        for idx, row in smartsheet_update_df.iterrows():
+            try:
+                cells = []
+                for col in smartsheet_update_df.columns:
+                    try:
+                        col_id = smartsheet_sheet.columns[smartsheet_update_df.columns.get_loc(col)].id
+                        cell = smartsheet.models.Cell()
+                        cell.column_id = col_id
+                        cell.value = row[col]
+
+                        # Apply formatting for part status columns (Pur Part, Cus Part, PCB, Stencil)
+                        if col in format_part_columns:
+                            if row[col]:  # If there is text in the cell
+                                cell.format = ",,,,,,,,2,19,,0,,,,0,"   # White text, red background for active status
+                            else:  # If cell is empty
+                                cell.format = ",,,,,,,,14,14,,0,,,,0,"  # Green text and background
                     
-            cells.append(cell)
-        new_row = smartsheet.models.Row()
-        new_row.to_bottom = True
-        new_row.cells = cells
-        new_rows.append(new_row)
+                        # Apply formatting for Turn column
+                        if col == format_turn_column:
+                            try:
+                                turn_value = str(row[col]).strip().upper()
+                                turn_num = float(turn_value)
+                                if turn_num >= 7:
+                                    cell.format = ",,,,,,,,,9,,0,,,,0,"
+                                else:
+                                    cell.format = ",,,,,,,,,0,,0,,,,0,"
+                            except (ValueError, AttributeError) as e:
+                                logger.debug(f"Turn formatting error for row {idx}: {e}")
+                                formatting_errors += 1
 
-    # Add new rows in batches
-    print(f"Adding {len(new_rows)} rows to Smartsheet in batches of {ADD_BATCH_SIZE}...")
-    for i in range(0, len(new_rows), ADD_BATCH_SIZE):
-        batch_rows = new_rows[i:i+ADD_BATCH_SIZE]
-        smartsheet_client.Sheets.add_rows(assembly_part_tracking_id, batch_rows)
-        print(f"Added rows {i+1} to {i+len(batch_rows)}")
+                        # Apply formatting for Due Date column
+                        if col == format_due_column:
+                            try:
+                                due_date = pd.to_datetime(row[col], errors='coerce')
 
-    print("Smartsheet update complete.")
+                                if pd.notnull(due_date):
+                                    today = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
+                                    delta_days = (due_date - today).days
+
+                                    cell.format = ",,,,,,,,40,2,,0,,,,0,"   # Purple text, white background
+                                    
+                                    if delta_days < 0:
+                                        cell.format = ",,,,,,,,2,19,,0,,,,0,"   # White text, red background
+                                    elif delta_days <= 3:
+                                        cell.format = ",,,,,,,,2,28,,0,,,,0,"   # White text, orange background
+
+                            except Exception as ex:
+                                logger.debug(f"Due date formatting error for row {idx}: {ex}")
+                                formatting_errors += 1
+                        
+                        cells.append(cell)
+                    except Exception as cell_err:
+                        logger.error(f"Error processing cell in column '{col}' for row {idx}: {cell_err}")
+                        raise
+                        
+                new_row = smartsheet.models.Row()
+                new_row.to_bottom = True
+                new_row.cells = cells
+                new_rows.append(new_row)
+            except Exception as row_err:
+                logger.error(f"Error building row {idx}: {row_err}")
+                logger.error(f"Row data: {row.to_dict()}")
+                raise
+
+        if formatting_errors > 0:
+            logger.warning(f"Encountered {formatting_errors} formatting errors (non-critical)")
+
+        # Add new rows in batches
+        logger.info(f"Adding {len(new_rows)} rows to Smartsheet in batches of {ADD_BATCH_SIZE}...")
+        print(f"Adding {len(new_rows)} rows to Smartsheet in batches of {ADD_BATCH_SIZE}...")
+        for i in range(0, len(new_rows), ADD_BATCH_SIZE):
+            batch_rows = new_rows[i:i+ADD_BATCH_SIZE]
+            try:
+                smartsheet_client.Sheets.add_rows(assembly_part_tracking_id, batch_rows)
+                logger.debug(f"Added batch: rows {i+1} to {i+len(batch_rows)}")
+                print(f"Added rows {i+1} to {i+len(batch_rows)}")
+            except Exception as e:
+                logger.error(f"Error adding batch {i//ADD_BATCH_SIZE + 1}: {e}")
+                logger.error(f"Batch size: {len(batch_rows)} rows")
+                raise
+
+        logger.info("Smartsheet update complete")
+        print("Smartsheet update complete.")
+        
+    except Exception as e:
+        logger.error(f"Fatal error in update_smartsheet: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise
 
 
