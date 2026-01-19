@@ -66,8 +66,9 @@ import logging
 # Configure logging based on DEBUG flag
 log_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
 
-# Create SaveFiles directory if it doesn't exist
-os.makedirs('SaveFiles', exist_ok=True)
+# Create SaveFiles directory if it doesn't exist (using absolute path from defines)
+save_files_dir = os.path.join(SCRIPT_DIR, 'SaveFiles')
+os.makedirs(save_files_dir, exist_ok=True)
 
 # Setup logging to both file and console
 log_handlers = [
@@ -233,7 +234,7 @@ try:
     
     if data_corrections:
         # Save corrections report
-        corrections_file = 'SaveFiles/data_corrections.json'
+        corrections_file = os.path.join(SCRIPT_DIR, 'SaveFiles', 'data_corrections.json')
         try:
             with open(corrections_file, 'w') as f:
                 json.dump(data_corrections, f, indent=2)

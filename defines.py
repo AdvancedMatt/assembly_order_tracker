@@ -1,9 +1,21 @@
+import os
+import sys
+
+# Get the directory where the script/exe is located
+# This ensures paths work correctly when run as a scheduled task
+if getattr(sys, 'frozen', False):
+    # Running as compiled executable
+    SCRIPT_DIR = os.path.dirname(sys.executable)
+else:
+    # Running as a script
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Debug and logging configuration
 debug_output = False
 DEBUG = False  # Set to True to enable detailed debug logging
 LOG_LEVEL = "WARNING"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
-ERROR_LOG_PATH = "SaveFiles/error_log.txt"
-DEBUG_LOG_PATH = "SaveFiles/debug_log.txt"
+ERROR_LOG_PATH = os.path.join(SCRIPT_DIR, "SaveFiles", "error_log.txt")
+DEBUG_LOG_PATH = os.path.join(SCRIPT_DIR, "SaveFiles", "debug_log.txt")
 
 # Smartsheet columns to store - used to restor smartsheet during update
 user_entered_columns = [

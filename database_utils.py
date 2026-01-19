@@ -71,6 +71,11 @@ class DatabaseConnection:
         Raises:
             Exception: If query execution fails
         """
+        # Check if connection is established
+        if not self.connection or not self.cursor:
+            logger.warning("Database connection not available - returning empty results")
+            return []
+            
         try:
             logger.debug(f"Executing query (first 100 chars): {query[:100]}...")
             if params:
@@ -112,7 +117,15 @@ class DatabaseConnection:
     
     def __enter__(self):
         """Context manager entry"""
-        self.connect()
+        try:
+            if not self.connect():
+                logger.warning("Database connection failed - queries will return empty results")
+                # Return self anyway so code can continue
+                return self
+        except Exception as e:
+            logger.error(f"Exception during database connection: {e}")
+            logger.warning("Continuing without database connection")
+            # Return self anyway so code can continue
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):

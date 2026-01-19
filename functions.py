@@ -18,6 +18,10 @@ from local_secrets import PASSWORD_FILE_PATH, ENCRYPTED_KEY_PATH, SQL_PASSWORD_P
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
+def get_save_path(filename):
+    """Helper function to get absolute path for SaveFiles directory"""
+    return os.path.join(SCRIPT_DIR, 'SaveFiles', filename)
+
 def sanitize_cam_data(df: pd.DataFrame) -> tuple:
     """
     Sanitizes camReadme data by validating and correcting field types.
@@ -649,7 +653,7 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
             unique_order_nos = list(set(wo_to_order_map.values()))
 
             # DEBUG: Save unique order numbers to file
-            debug_order_nos_path = 'SaveFiles/debug_order_numbers.txt'
+            debug_order_nos_path = get_save_path('debug_order_numbers.txt')
             with open(debug_order_nos_path, 'w') as f:
                 f.write("Unique Order Numbers for Query:\n")
                 f.write("=" * 50 + "\n\n")
@@ -668,7 +672,7 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
             """
 
              # DEBUG: Save query with placeholders to file
-            debug_query_path = 'SaveFiles/debug_query.txt'
+            debug_query_path = get_save_path('debug_query.txt')
             with open(debug_query_path, 'w') as f:
                 f.write("SQL Query with Placeholders:\n")
                 f.write("=" * 50 + "\n\n")
@@ -684,7 +688,7 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
             print(f"  DEBUG: Query returned {len(results)} results")
 
             # DEBUG: Save query results to file
-            debug_results_path = 'SaveFiles/debug_query_results.txt'
+            debug_results_path = get_save_path('debug_query_results.txt')
             with open(debug_results_path, 'w') as f:
                 f.write("SQL Query Results:\n")
                 f.write("=" * 50 + "\n\n")
@@ -731,7 +735,7 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
                         print(f"  DEBUG: Found credit hold in DB for {wo_number} (order {order_no_str})")
             
             # DEBUG: Save WO to order mapping
-            debug_mapping_path = 'SaveFiles/debug_wo_to_order_mapping.txt'
+            debug_mapping_path = get_save_path('debug_wo_to_order_mapping.txt')
             with open(debug_mapping_path, 'w') as f:
                 f.write("WO# to Order Number Mapping:\n")
                 f.write("=" * 50 + "\n\n")
@@ -743,7 +747,7 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
             print(f"  DEBUG: Saved WO mappings to {debug_mapping_path}")
             
             # DEBUG: Save credit holds found
-            debug_credit_holds_path = 'SaveFiles/debug_credit_holds_found.txt'
+            debug_credit_holds_path = get_save_path('debug_credit_holds_found.txt')
             with open(debug_credit_holds_path, 'w') as f:
                 f.write("Credit Holds Found in Database:\n")
                 f.write("=" * 50 + "\n\n")
@@ -807,11 +811,12 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
         })
     
     # Save discrepancies to CSV
-    os.makedirs('SaveFiles', exist_ok=True)
+    save_files_dir = os.path.join(SCRIPT_DIR, 'SaveFiles')
+    os.makedirs(save_files_dir, exist_ok=True)
     
     if discrepancies:
         discrepancy_df = pd.DataFrame(discrepancies)
-        discrepancy_path = 'SaveFiles/credit_hold_discrepancies.csv'
+        discrepancy_path = get_save_path('credit_hold_discrepancies.csv')
         discrepancy_df.to_csv(discrepancy_path, index=False)
         print(f"⚠ Credit hold discrepancies found: {len(discrepancies)} records")
         print(f"  Discrepancy report saved: {discrepancy_path}")
@@ -820,11 +825,11 @@ def build_active_credithold_files(cam_data: list, existing_credit_holds: set) ->
     else:
         # Save empty discrepancy file with timestamp to show it was checked
         discrepancy_df = pd.DataFrame(columns=['WO#', 'Source', 'DB_Credit_Hold', 'CAM_Credit_Hold'])
-        discrepancy_path = 'SaveFiles/credit_hold_discrepancies.csv'
+        discrepancy_path = get_save_path('credit_hold_discrepancies.csv')
         discrepancy_df.to_csv(discrepancy_path, index=False)
         
         # Also save a status file showing when the check was performed
-        status_path = 'SaveFiles/credit_hold_check_status.txt'
+        status_path = get_save_path('credit_hold_check_status.txt')
         with open(status_path, 'w') as f:
             f.write("Credit Hold Discrepancy Check\n")
             f.write("=" * 50 + "\n\n")
@@ -901,7 +906,7 @@ def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.
     """
     try:
         # Create Backups directory if it doesn't exist
-        backups_dir = 'SaveFiles/Backups'
+        backups_dir = os.path.join(SCRIPT_DIR, 'SaveFiles', 'Backups')
         os.makedirs(backups_dir, exist_ok=True)
         
         # Create timestamped backup of entire DataFrame
@@ -981,10 +986,11 @@ def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.
             print()
             
             # Ensure SaveFiles directory exists
-            os.makedirs('SaveFiles', exist_ok=True)
+            save_files_dir = os.path.join(SCRIPT_DIR, 'SaveFiles')
+            os.makedirs(save_files_dir, exist_ok=True)
             
             # Save to JSON file
-            user_data_file_path = 'SaveFiles/log_user_entered_data.json'
+            user_data_file_path = get_save_path('log_user_entered_data.json')
             with open(user_data_file_path, 'w') as file:
                 json.dump(user_entered_data, file, indent=2, default=str)
             
@@ -994,13 +1000,13 @@ def store_smartsheet_user_data(smartsheet_part_tracking_df: pd.DataFrame) -> pd.
         else:
             print("No smartsheet data available to extract user-entered information")
             # Create empty file
-            with open('SaveFiles/log_user_entered_data.json', 'w') as file:
+            with open(get_save_path('log_user_entered_data.json'), 'w') as file:
                 json.dump([], file)
 
     except Exception as e:
         print(f"Error storing user-entered data: {e}")
         # Create empty file on error
-        with open('SaveFiles/log_user_entered_data.json', 'w') as file:
+        with open(get_save_path('log_user_entered_data.json'), 'w') as file:
             json.dump([], file)
 
 def extract_first_designator(designators_string):
@@ -1173,8 +1179,9 @@ def build_master_bom(jobs_df: pd.DataFrame, assembly_active_directory: str, debu
             master_bom_df = pd.DataFrame(master_bom_data)
             
             # Save as CSV file
-            csv_file_path = 'SaveFiles/master_BOM_no_overage.csv'
-            os.makedirs('SaveFiles', exist_ok=True)
+            csv_file_path = get_save_path('master_BOM_no_overage.csv')
+            save_files_dir = os.path.join(SCRIPT_DIR, 'SaveFiles')
+            os.makedirs(save_files_dir, exist_ok=True)
             master_bom_df.to_csv(csv_file_path, index=False)
             print(f"Master BOM (no overage) saved to: {csv_file_path}")
             print(f"DataFrame shape: {master_bom_df.shape}")
@@ -1297,7 +1304,7 @@ def add_overage_to_master_bom(master_bom_df, QUOTE_DIR, apply_overage=True):
             print("Skipping overage processing (apply_overage=False)")
         
         # Save updated BOM as CSV file (faster than Excel)
-        updated_csv_path = 'SaveFiles/master_BOM.csv'
+        updated_csv_path = get_save_path('master_BOM.csv')
         master_bom_with_overage.to_csv(updated_csv_path, index=False)
         
         if apply_overage:
@@ -2085,7 +2092,7 @@ def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs
 
     # Step 2: Prepare Excel file
     blue_gradient_bar(2, 4, color_options[4])
-    excel_file_path = 'SaveFiles/job_statistics.xlsx'
+    excel_file_path = get_save_path('job_statistics.xlsx')
 
     # Create Excel writer object
     with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
@@ -2102,7 +2109,7 @@ def generate_statistics_file(cam_data: list, active_jobs: list, credit_hold_jobs
         # Step 4: Create Sheet 2 - Active Jobs Detail from active jobs log file
         blue_gradient_bar(4, 4, color_options[6])
         try:
-            with open('SaveFiles/log_active_jobs.json', 'r') as file:
+            with open(get_save_path('log_active_jobs.json'), 'r') as file:
                 active_jobs_data = json.load(file)
             
             # Create DataFrame with specified columns

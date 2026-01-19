@@ -1,0 +1,17 @@
+[Database]
+# MS SQL Server Configuration
+# Copy this file to config.ini and fill in your values
+
+# Server hostname or IP address
+server = YOUR_SERVER_HERE
+
+# Database name
+database = YOUR_DATABASE_HERE
+
+# Username for database connection
+username = YOUR_USERNAME_HERE
+
+# Note: Password is stored in encrypted files on network:
+# SQL_PASSWORD_PATH = //172.16.4.5/COMMON/Supply Chain/Software Development/Code/Docs/sql_bridge.enc
+# SQL_PASSWORD_KEY_PATH = ~/Documents/sql_bridge_pass.txt
+# The password decryption is handled automatically by the application

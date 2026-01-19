@@ -1,14 +1,23 @@
 """
 Configuration Manager for Customer Dashboard
-Handles environment variables and database credentials
+Handles configuration file and database credentials
 """
 
 import os
+import sys
 import logging
-from dotenv import load_dotenv
+import configparser
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# Get script directory for finding config.ini
+if getattr(sys, 'frozen', False):
+    # Running as compiled executable
+    SCRIPT_DIR = os.path.dirname(sys.executable)
+else:
+    # Running as a script
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Import the SQL password decryption function
 # Note: Import here to avoid circular imports
@@ -17,22 +26,50 @@ def get_sql_password():
     from functions import get_sql_password as _get_sql_password
     return _get_sql_password()
 
-# Load environment variables from .env file
-load_dotenv()
-
 class DatabaseConfig:
     """Database configuration handler"""
     
     def __init__(self):
-        """Initialize database configuration from environment variables and encrypted password"""
-        self.server = os.getenv('DB_SERVER')
-        self.database = os.getenv('DB_DATABASE')
-        self.username = os.getenv('DB_USERNAME')
-        # Get password from encrypted file instead of environment variable
+        """Initialize database configuration from config.ini file"""
+        self.server = None
+        self.database = None
+        self.username = None
+        self.password = None
+        
+        # Load configuration from INI file
+        config_path = os.path.join(SCRIPT_DIR, 'config.ini')
+        
+        if not os.path.exists(config_path):
+            logger.warning(f"Configuration file not found: {config_path}")
+            logger.warning("Database features will be disabled")
+            return
+        
+        try:
+            config = configparser.ConfigParser()
+            config.read(config_path)
+            
+            if 'Database' in config:
+                self.server = config['Database'].get('server')
+                self.database = config['Database'].get('database')
+                self.username = config['Database'].get('username')
+                logger.info(f"Loaded database config from {config_path}")
+            else:
+                logger.warning("No [Database] section found in config.ini")
+                
+        except Exception as e:
+            logger.warning(f"Failed to read config.ini: {e}")
+            return
+        
+        # Get password from encrypted file
         try:
             self.password = get_sql_password()
+            if not self.password:
+                logger.warning("SQL password decryption returned empty/None - database features will be disabled")
+        except FileNotFoundError as e:
+            logger.warning(f"SQL password file not found: {e} - database features will be disabled")
+            self.password = None
         except Exception as e:
-            logger.error(f"Failed to decrypt SQL password: {e}")
+            logger.warning(f"Failed to decrypt SQL password: {e} - database features will be disabled")
             self.password = None
     
     def validate(self) -> bool:
@@ -55,10 +92,10 @@ class DatabaseConfig:
             if 'password' in missing_fields:
                 logger.error(f"Missing database configuration: {', '.join(missing_fields)}")
                 logger.error("Password error - please check SQL_PASSWORD_PATH and SQL_PASSWORD_KEY_PATH files")
-                logger.error("For other fields, check your .env file or environment variables")
+                logger.error("For other fields, check your config.ini file")
             else:
                 logger.error(f"Missing database configuration: {', '.join(missing_fields)}")
-                logger.error("Please check your .env file or environment variables")
+                logger.error("Please check your config.ini file")
             return False
         
         return True
